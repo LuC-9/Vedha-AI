@@ -1499,7 +1499,10 @@ function loadExtensionContentScript(env) {
     manageModalStacking: typeof manageModalStacking !== 'undefined' ? manageModalStacking : null,
     injectFloatingCopilotWidget: typeof injectFloatingCopilotWidget !== 'undefined' ? injectFloatingCopilotWidget : null,
     setNativeValue: typeof setNativeValue !== 'undefined' ? setNativeValue : null,
-    showCopilotReviewHud: typeof showCopilotReviewHud !== 'undefined' ? showCopilotReviewHud : null
+    showCopilotReviewHud: typeof showCopilotReviewHud !== 'undefined' ? showCopilotReviewHud : null,
+    extractFormQuestions: typeof extractFormQuestions !== 'undefined' ? extractFormQuestions : null,
+    resolveScreeningAnswer: typeof resolveScreeningAnswer !== 'undefined' ? resolveScreeningAnswer : null,
+    fillModalInputs: typeof fillModalInputs !== 'undefined' ? fillModalInputs : null
   };
 `;
   const modifiedCode = rawCode.replace(/\n\s*\}\)\(\);?\s*$/, `${hook}\n})();`);

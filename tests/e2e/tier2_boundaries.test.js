@@ -73,7 +73,7 @@ describe('Tier 2: Boundary Value Analysis (F1 to F12)', () => {
 
       const root = env.document.getElementById('vedha-floating-copilot-root');
       if (root) {
-        assert.strictEqual(root.style.getPropertyValue('z-index'), '2147483647', 'Must remain top z-index even with deeply nested containers');
+        assert.strictEqual(root.style.getPropertyValue('z-index'), '2147482000', 'Unpinned dock must sit below dialogs even inside nested containers');
       }
       env.cleanup();
     });

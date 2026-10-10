@@ -38,3 +38,4 @@ Empower candidates with instantaneous career tooling across any webpage or job p
 
 ## Changelog
 - **2026-10-06T01:45:00+05:30**: Initial specification created based on user requirement for a comprehensive, always-accessible extension with Price Hatke-style in-page copilot and full feature suite visible by default.
+- **2026-10-10 19:20:00 UTC**: Toolbar action uses `default_popup: popup.html`. Boot paints Universal Careers Mode before auth or content-script messages. Auth and tab messages abort after 2.5s. A down API keeps the cached copilot and does not delete the token; HTTP 401/403 returns to login. Notice period, salary, and visa render as "Not Specified" when the profile has no value. Non-job and restricted URLs skip the content-script handshake. Rationale: issue #5 — popup hung on "Detecting target job…". Impacted: `extension/popup.js`, `extension/popup.html`, `extension/manifest.json`.

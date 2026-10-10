@@ -118,7 +118,7 @@ describe('Tier 1: Feature Coverage (F1 to F12)', () => {
       const root = env.document.getElementById('vedha-floating-copilot-root');
       if (root) {
         const rootZ = parseInt(root.style.getPropertyValue('z-index'), 10);
-        assert.strictEqual(rootZ, 2147483647, 'Dock root must maintain z-index 2147483647 above modal outlet');
+        assert.strictEqual(rootZ, 2147482000, 'Unpinned dock must drop below dialogs while a modal is open');
       }
       env.cleanup();
     });

@@ -16,7 +16,7 @@ const {
 describe('Tier 3: Pairwise Combinatorial Interactions', () => {
 
   // P1: F1 (Dock Elevation) + F8 (Modal Progression)
-  it('P1 (F1+F8): Floating dock maintains top z-index (2147483647) while modal application progresses', () => {
+  it('P1 (F1+F8): Unpinned dock drops below the modal while application progresses', () => {
     const env = createBrowserEnvironment({
       url: 'https://www.linkedin.com/jobs/view/101',
       html: `
@@ -35,7 +35,7 @@ describe('Tier 3: Pairwise Combinatorial Interactions', () => {
     const nextBtn = exports.findFormProgressionButton(modal);
 
     assert.ok(root, 'Floating dock root must exist');
-    assert.strictEqual(root.style.getPropertyValue('z-index'), '2147483647', 'Dock must remain at 2147483647');
+    assert.strictEqual(root.style.getPropertyValue('z-index'), '2147482000', 'Unpinned dock must sit at 2147482000 while a dialog is open');
     assert.ok(nextBtn, 'Next progression button must be found within modal');
     assert.strictEqual(nextBtn.element.id, 'modal_step1_btn');
     env.cleanup();

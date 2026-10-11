@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ADR-009 — Unpinned Copilot Yields to Application Dialogs</title>
+<style>
+  :root { --bg:#0b0d12; --card:#14161d; --line:#262932; --txt:#e6e8ee; --mut:#9aa0ae; --sky:#38bdf8; --grn:#34d399; --amb:#fbbf24; --rose:#fb7185; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; line-height:1.65; }
+  .wrap { max-width:960px; margin:0 auto; padding:40px 24px 80px; }
+  .crumb { color:var(--mut); font-size:13px; margin-bottom:12px; }
+  .crumb a { color:var(--sky); text-decoration:none; }
+  h1 { font-size:32px; margin:0 0 6px; letter-spacing:-.5px; }
+  .meta { display:flex; gap:10px; flex-wrap:wrap; margin:14px 0 28px; }
+  .badge { font-size:12px; font-weight:700; padding:4px 12px; border-radius:999px; border:1px solid; }
+  .b-grn { color:var(--grn); border-color:#34d39955; background:#34d39914; }
+  .b-sky { color:var(--sky); border-color:#38bdf855; background:#38bdf814; }
+  .b-mut { color:var(--mut); border-color:#9aa0ae44; background:#9aa0ae14; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:24px; margin:20px 0; }
+  .card h2 { margin:0 0 12px; font-size:20px; }
+  .card h3 { margin:18px 0 8px; font-size:15px; color:var(--sky); }
+  p, li { color:#c9cdd8; font-size:15px; }
+  code { background:#0e1015; border:1px solid var(--line); border-radius:6px; padding:1px 7px; font-size:13.5px; color:var(--amb); }
+  table { width:100%; border-collapse:collapse; font-size:14px; margin-top:10px; }
+  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--mut); font-weight:600; font-size:12.5px; text-transform:uppercase; letter-spacing:.06em; }
+  .human { background:#0e1420; border-left:3px solid var(--sky); padding:14px 18px; border-radius:0 12px 12px 0; margin:16px 0; }
+  svg.flow { width:100%; height:auto; background:#0e1015; border:1px solid var(--line); border-radius:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="crumb"><a href="index.html">Architecture decisions</a> · ADR-009</div>
+  <h1>Unpinned copilot yields to application dialogs</h1>
+  <div class="meta">
+    <span class="badge b-grn">ACCEPTED</span>
+    <span class="badge b-sky">Extension</span>
+    <span class="badge b-mut">2026-10-10</span>
+  </div>
+
+  <div class="human">
+    <strong>Plain version.</strong> When an application window opens, the floating Vedha card gets out of the way. It shrinks to the small pill and sits underneath the window so Next, Review, and Discard stay clickable. If you pinned the card on purpose, it stays large and on top. On Google, a new tab, or any page that is not a job, the toolbar popup still opens the full career dashboard instead of spinning on “Detecting target job…”.
+  </div>
+
+  <div class="card">
+    <h2>Context</h2>
+    <p>
+      LinkedIn, Greenhouse, Lever, and Workday mount application UI in dialogs whose host z-index is around 1000. The copilot root used <code>2147483647</code> at all times, including while those dialogs were open. A later pin feature made “always above modals” the default path inside <code>manageModalStacking</code>. That kept the dock on top of Discard confirmations and the Easy Apply footer.
+    </p>
+    <p>
+      Separately, <code>popup.js</code> blocked boot on <code>GET /api/auth/me</code> and on <code>chrome.tabs.sendMessage</code>. The toolbar action had no popup, so the icon depended on the side-panel click listener.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Decision</h2>
+    <svg class="flow" viewBox="0 0 860 220" role="img" aria-label="Stacking order while a dialog is open">
+      <rect x="40" y="16" width="780" height="44" rx="8" fill="#052e1c" stroke="#34d399"/>
+      <text x="430" y="43" text-anchor="middle" fill="#34d399" font-size="14">Later dialog (Discard, picker) · 2147483200</text>
+      <rect x="40" y="72" width="780" height="44" rx="8" fill="#0e1420" stroke="#38bdf8"/>
+      <text x="430" y="99" text-anchor="middle" fill="#e6e8ee" font-size="14">First dialog · 2147483100</text>
+      <rect x="40" y="128" width="780" height="36" rx="8" fill="#1a1408" stroke="#fbbf24"/>
+      <text x="430" y="151" text-anchor="middle" fill="#fbbf24" font-size="13">Unpinned copilot pill · 2147482000</text>
+      <rect x="40" y="174" width="380" height="32" rx="8" fill="#14161d" stroke="#262932"/>
+      <text x="230" y="195" text-anchor="middle" fill="#9aa0ae" font-size="12">Chat tray · 1000</text>
+      <rect x="440" y="174" width="380" height="32" rx="8" fill="#1a1020" stroke="#fb7185"/>
+      <text x="630" y="195" text-anchor="middle" fill="#fb7185" font-size="12">Pinned card only · 2147483647</text>
+    </svg>
+    <h3>Stacking</h3>
+    <ul>
+      <li>Dialogs are sorted by a walk of <code>document.body</code>. Harness DOM has no <code>compareDocumentPosition</code>.</li>
+      <li>Base z-index is <code>2147483100</code>. Each later dialog adds 100. Backdrops use <code>modalZ - 1</code>.</li>
+      <li>LinkedIn messaging trays drop to <code>1000</code> while a dialog is open.</li>
+      <li>Unpinned dock: one-shot capture of expanded state, collapse to <code>#vedha-copilot-pill</code>, z-index <code>2147482000</code>. The 350ms pulse must not recapture after collapse.</li>
+      <li>When no dialog remains, z-index returns to <code>2147483647</code> and a previously expanded card is shown again. Drag coordinates in <code>vedha_dock_x</code> / <code>vedha_dock_y</code> are not rewritten.</li>
+      <li>Pinned dock stays expanded at <code>2147483647</code>. Pin is the explicit “cover the page” override.</li>
+    </ul>
+    <h3>Popup</h3>
+    <ul>
+      <li><code>action.default_popup</code> is <code>popup.html</code>. Side panel <code>default_path</code> stays <code>popup.html</code>.</li>
+      <li>Boot writes Universal Careers Mode before awaiting auth or the active tab.</li>
+      <li><code>fetch</code> and <code>tabs.sendMessage</code> race a 2500ms timer. 401 and 403 clear the session. Other failures keep <code>cachedUser</code>, <code>candidateProfile</code>, and <code>cachedMasterResume</code>.</li>
+      <li>Restricted URLs and non-job hosts never wait on the content script.</li>
+      <li>Missing notice period, salary, and visa sponsorship render as “Not Specified”.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Alternatives</h2>
+    <table>
+      <tr><th>Option</th><th>Why it lost</th></tr>
+      <tr><td>Keep the dock at 2147483647 and only move it with drag</td><td>The default corner still covers Next and Submit. Users should not have to drag before they can close a dialog.</td></tr>
+      <tr><td>Collapse even when pinned</td><td>The pin control promises the card stays over modals. Existing pin tests require the card to stay visible.</td></tr>
+      <tr><td>Leave the icon on the side panel only</td><td>Issue #5 asks for the toolbar popup on every site, including new tabs.</td></tr>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Consequences</h2>
+    <p>Clicking the toolbar icon opens the popup and does not fire <code>chrome.action.onClicked</code>, so the icon no longer opens the side panel by itself. The side panel remains available from Chrome’s side-panel UI because <code>side_panel.default_path</code> is unchanged.</p>
+    <p>Files: <code>extension/content.js</code>, <code>extension/popup.js</code>, <code>extension/popup.html</code>, <code>extension/manifest.json</code>, <code>tests/e2e/open_extension_issues.test.js</code>.</p>
+  </div>
+</div>
+</body>
+</html>

@@ -44,7 +44,7 @@ describe('Tier 4: Real-World Application Workloads', () => {
 
     const root = env.document.getElementById('vedha-floating-copilot-root');
     assert.ok(root, 'Copilot dock must be present on LinkedIn portal');
-    assert.strictEqual(root.style.getPropertyValue('z-index'), '2147483647');
+    assert.strictEqual(root.style.getPropertyValue('z-index'), '2147482000');
 
     // 2. Discover step 1 progression button
     const modal = env.document.querySelector('.jobs-easy-apply-modal');
@@ -156,7 +156,7 @@ describe('Tier 4: Real-World Application Workloads', () => {
     // Verify copilot stacks above Workday modal elevation
     const root = env.document.getElementById('vedha-floating-copilot-root');
     if (root) {
-      assert.strictEqual(root.style.getPropertyValue('z-index'), '2147483647');
+      assert.strictEqual(root.style.getPropertyValue('z-index'), '2147482000');
     }
 
     // Progression button discovery matches "Save and continue"

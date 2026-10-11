@@ -40,3 +40,4 @@
 
 ## Changelog
 - **2026-10-06 01:58:30 IST**: Plan drafted for autonomous modal elevation engine, multi-modal hierarchical stacking, and draggable copilot dock.
+- **2026-10-10 19:20:00 UTC**: Implemented unpinned demotion (`2147482000` + pill) and document-order dialog stacking (`2147483100 + n * 100`). Pinned docks stay at `2147483647`. Restore uses a module flag so the 350ms pulse does not forget that the card was expanded. Impacted: `extension/content.js`.

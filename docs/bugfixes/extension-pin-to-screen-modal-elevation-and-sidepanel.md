@@ -72,3 +72,4 @@
 
 ## ## Changelog
 - **2026-10-06T13:46:00+05:30**: Initial Bug Fix Plan created for extension modal elevation, pin-to-screen mode, and Chrome Side Panel API integration.
+- **2026-10-10 19:20:00 UTC**: Superseded for the unpinned dock. An unpinned copilot now collapses and uses `z-index: 2147482000` while dialogs are open. Pin still keeps the card at `2147483647`. See `docs/bugfixes/modal-dock-demotion-and-popup-careers-mode.md`.

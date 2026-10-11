@@ -4297,6 +4297,74 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
   }
 
   // 12. Universal Modal Elevation & Anti-Occlusion Stacking Engine
+  const DOCK_Z_FOREGROUND = "2147483647";
+  const DOCK_Z_BELOW_DIALOGS = "2147482000";
+  // Captured once per open-dialog session so the 350ms pulse does not
+  // overwrite the pre-collapse expanded state with the collapsed one.
+  let dockExpandedBeforeModal = null;
+
+  function readDockPinned() {
+    try { return sessionStorage.getItem("vedha_dock_pinned") === "true"; } catch (_) { return false; }
+  }
+
+  function dockParts(dockRoot) {
+    const shadow = dockRoot?.shadowRoot;
+    const byId = (id) => {
+      if (shadow) {
+        if (typeof shadow.getElementById === "function") return shadow.getElementById(id);
+        if (typeof shadow.querySelector === "function") return shadow.querySelector("#" + id);
+      }
+      return document.getElementById(id);
+    };
+    return {
+      card: byId("vedha-copilot-dock"),
+      pill: byId("vedha-copilot-pill")
+    };
+  }
+
+  function dockCardIsExpanded(card) {
+    if (!card) return false;
+    if (card.dataset && card.dataset.vedhaExpanded === "true") return true;
+    if (card.dataset && card.dataset.vedhaExpanded === "false") return false;
+    return card.style.display !== "none";
+  }
+
+  function presentDock(card, pill, expanded) {
+    if (card) {
+      card.style.display = expanded ? "flex" : "none";
+      if (card.dataset) card.dataset.vedhaExpanded = String(expanded);
+    }
+    if (pill) pill.style.display = expanded ? "none" : "flex";
+  }
+
+  function placeDockRoot(dockRoot, zIndex) {
+    if (!dockRoot) return;
+    dockRoot.style.setProperty("z-index", zIndex, "important");
+    dockRoot.style.setProperty("position", "fixed", "important");
+    if (dockRoot.parentElement && dockRoot.parentElement.lastElementChild !== dockRoot) {
+      dockRoot.parentElement.appendChild(dockRoot);
+    }
+  }
+
+  function sortNodesInDocumentOrder(nodes) {
+    const wanted = new Set(nodes);
+    const ordered = [];
+    const walk = (node) => {
+      if (!node || ordered.length === nodes.length) return;
+      if (wanted.has(node)) ordered.push(node);
+      const children = node.children;
+      if (!children) return;
+      for (let i = 0; i < children.length; i++) walk(children[i]);
+    };
+    walk(document.body || document.documentElement);
+    if (ordered.length < nodes.length) {
+      for (const node of nodes) {
+        if (ordered.indexOf(node) === -1) ordered.push(node);
+      }
+    }
+    return ordered;
+  }
+
   function manageModalStacking() {
     const modalSelectors = [
       "[role='dialog']",
@@ -4333,13 +4401,10 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
 
     const hasActiveModal = openModals.length > 0;
     const dockRoot = document.getElementById("vedha-floating-copilot-root");
-    const shadow = dockRoot?.shadowRoot;
-    const dockCard = shadow
-      ? (typeof shadow.getElementById === "function" ? shadow.getElementById("vedha-copilot-dock") : shadow.querySelector("#vedha-copilot-dock"))
-      : document.getElementById("vedha-copilot-dock");
-    const dockPill = shadow
-      ? (typeof shadow.getElementById === "function" ? shadow.getElementById("vedha-copilot-pill") : shadow.querySelector("#vedha-copilot-pill"))
-      : document.getElementById("vedha-copilot-pill");
+    const parts = dockParts(dockRoot);
+    const dockCard = parts.card;
+    const dockPill = parts.pill;
+    const orderedModals = sortNodesInDocumentOrder(openModals);
 
     if (hasActiveModal) {
       // 1. Elevate LinkedIn's modal outlet container
@@ -4355,9 +4420,9 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
         msgTray.style.setProperty("z-index", "1000", "important");
       }
 
-      // 3. Stack modals progressively so secondary dialogs (Discard, Save, Pickers) float strictly above primary dialogs
+      // 3. Stack modals in document order so later dialogs (Discard, Save, Pickers) float strictly above earlier ones
       const baseZ = 2147483100;
-      openModals.forEach((modal, index) => {
+      orderedModals.forEach((modal, index) => {
         const modalZ = baseZ + index * 100;
         modal.style.setProperty("z-index", String(modalZ), "important");
         modal.style.setProperty("pointer-events", "auto", "important");
@@ -4386,31 +4451,26 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
         }
       });
 
-      // 4. Coordinate with Vedha Copilot Dock:
-      // Ensure dock root is ALWAYS elevated ABOVE all modals, overlays, and backdrops (z-index: 2147483647)
-      if (dockRoot) {
-        dockRoot.style.setProperty("z-index", "2147483647", "important");
-        dockRoot.style.setProperty("position", "fixed", "important");
-        if (dockRoot.parentElement && dockRoot.parentElement.lastElementChild !== dockRoot) {
-          dockRoot.parentElement.appendChild(dockRoot);
+      // 4. Unpinned copilot drops below dialogs and collapses to the pill.
+      //    Pin is an explicit override: the card stays expanded at the top layer.
+      const isUserPinned = readDockPinned();
+      if (isUserPinned) {
+        dockExpandedBeforeModal = null;
+        placeDockRoot(dockRoot, DOCK_Z_FOREGROUND);
+        presentDock(dockCard, dockPill, true);
+      } else {
+        if (dockExpandedBeforeModal === null) {
+          dockExpandedBeforeModal = dockCardIsExpanded(dockCard);
         }
-      }
-      // Never force collapse if the user has pinned it or if it is actively in use
-      let isUserPinned = false;
-      try { isUserPinned = sessionStorage.getItem("vedha_dock_pinned") === "true"; } catch (_) {}
-      if (isUserPinned && dockCard && dockPill) {
-        dockCard.style.display = "flex";
-        dockPill.style.display = "none";
-        dockCard.dataset.vedhaExpanded = "true";
+        placeDockRoot(dockRoot, DOCK_Z_BELOW_DIALOGS);
+        presentDock(dockCard, dockPill, false);
       }
     } else {
-      if (dockRoot) {
-        dockRoot.style.setProperty("z-index", "2147483647", "important");
-        dockRoot.style.setProperty("position", "fixed", "important");
-        if (dockRoot.parentElement && dockRoot.parentElement.lastElementChild !== dockRoot) {
-          dockRoot.parentElement.appendChild(dockRoot);
-        }
+      placeDockRoot(dockRoot, DOCK_Z_FOREGROUND);
+      if (dockExpandedBeforeModal === true) {
+        presentDock(dockCard, dockPill, true);
       }
+      dockExpandedBeforeModal = null;
       const msgTray = document.querySelector("aside.msg-overlay-container, #msg-overlay");
       if (msgTray && msgTray.style.zIndex === "1000") {
         msgTray.style.removeProperty("z-index");

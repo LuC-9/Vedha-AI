@@ -66,3 +66,4 @@ Maximize application completion rates and eliminate user friction caused by moda
 
 ## Changelog
 - **2026-10-06 01:58:00 IST**: Initial specification created in response to user request for open modals to be forced on top of all page content and freely usable without being hidden in the background.
+- **2026-10-10 19:20:00 UTC**: Unpinned dock collapses to the pill and uses `z-index: 2147482000` while any dialog is open, then restores the previous expanded state and `2147483647` when dialogs close. Dialogs are ordered by document position from `2147483100`. A pinned dock (`vedha_dock_pinned`) stays expanded at `2147483647` so Pin remains an explicit override. Rationale: issue #4 — application controls were covered by the always-on-top dock. Impacted: `extension/content.js`, e2e stacking tests.

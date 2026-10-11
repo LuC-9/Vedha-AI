@@ -735,6 +735,7 @@ builder.Entity&lt;RefreshToken&gt;(b =>
             Injected into <code>http://localhost:3000/*</code> to listen for authentication postMessages, and into <code>https://*.linkedin.com/*</code> to inspect Easy Apply modals and auto-fill form inputs.
             On LinkedIn it polls the details pane for 2.5 seconds, ignores messaging overlays without treating form messages as chat, and clicks Easy Apply with a pointer event sequence. An already-open Easy Apply dialog is used immediately.
             Safe auto-fill calls <code>extractFormQuestions</code> so each control is paired with its own legend or label, then <code>resolveScreeningAnswer</code> before <code>POST /api/orchestrator/generate-answers</code>.
+            <code>manageModalStacking</code> orders open dialogs by document position (<code>2147483100 + index * 100</code>). An unpinned dock collapses and drops to <code>2147482000</code> until those dialogs close. <code>popup.js</code> paints Universal Careers Mode before auth and tab messages, and times out both at 2.5 seconds.
           </p>
         </div>
         <div class="card">

@@ -28,6 +28,7 @@
   },
   "action": {
     "default_title": "Vedha AI Copilot",
+    "default_popup": "popup.html",
     "default_icon": {
       "16": "vedha-logo.png",
       "48": "vedha-logo.png",

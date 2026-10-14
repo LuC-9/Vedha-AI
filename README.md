@@ -92,6 +92,21 @@ Ensure you configure your `GEMINI_API_KEY` (or OpenAI/Claude keys) in `infra/.en
 
 ### 2. Running with Containers
 
+#### One command (Linux, macOS, or Windows with Docker or Podman)
+```bash
+chmod +x run.sh
+./run.sh
+```
+That builds and starts Postgres, Redis, NATS, MinIO, Crawl4AI, the API, the Playwright worker, and the web app. Other commands:
+
+```bash
+./run.sh --no-build    # start existing images
+./run.sh logs          # follow logs
+./run.sh ps            # container status
+./run.sh down          # stop, keep database volumes
+./run.sh down --volumes
+```
+
 #### Option A: One-Click Windows Launcher (Native Podman + WSL2)
 On Windows with WSL Podman, run the orchestrator script:
 ```powershell
@@ -160,6 +175,7 @@ npm run dev
 ├── SYSTEM_DESIGN_AND_PATTERNS.md # Masterclass in Clean Architecture & SOLID patterns
 ├── INTERESTING_THINGS.md    # 18 deep engineering highlights & innovation breakdowns
 ├── README.md                # Project documentation and quick start guide
+├── run.sh                   # Build and start the full Compose stack
 ├── context.md               # Continuous architecture knowledge base & session history
 ├── infra/
 │   ├── docker-compose.yml       # Production multi-service container orchestration

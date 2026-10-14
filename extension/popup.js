@@ -131,14 +131,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Internal State
   let activeTabId = null;
   let activeTabUrl = "";
-  let extractedJob = {
-    title: "Detecting target job...",
-    company: "Open any career portal or job post",
-    url: "",
-    source: "Universal Web",
-    description: "",
-    skills: []
-  };
+  const AUTH_TIMEOUT_MS = 2500;
+  const TAB_MESSAGE_TIMEOUT_MS = 2500;
+
+  function universalCareersJob() {
+    return {
+      title: "Universal Careers Mode",
+      company: "Career tools stay available on this page",
+      url: "",
+      source: "Universal Web",
+      description: "",
+      skills: []
+    };
+  }
+
+  let extractedJob = universalCareersJob();
   let authToken = null;
   let currentUser = null;
   let currentProfile = null;
@@ -209,31 +216,82 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  function fetchWithTimeout(url, options = {}, timeoutMs = AUTH_TIMEOUT_MS) {
+    const Controller = typeof AbortController === "function" ? AbortController : null;
+    const controller = Controller ? new Controller() : null;
+    let timer;
+    const timed = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        if (controller) controller.abort();
+        reject(new Error("Request timed out"));
+      }, timeoutMs);
+    });
+    const request = fetch(url, controller ? { ...options, signal: controller.signal } : options);
+    return Promise.race([request, timed]).finally(() => clearTimeout(timer));
+  }
+
+  async function hydrateCachedSession() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(
+        ["vedha_token", "cachedUser", "candidateProfile", "cachedMasterResume"],
+        (stored) => {
+          if (stored?.vedha_token) authToken = stored.vedha_token;
+          if (stored?.cachedUser) currentUser = stored.cachedUser;
+          if (stored?.candidateProfile) currentProfile = stored.candidateProfile;
+          if (stored?.cachedMasterResume) currentMasterResume = stored.cachedMasterResume;
+          resolve(stored || {});
+        }
+      );
+    });
+  }
+
+  function paintCachedCopilot() {
+    showCopilotView();
+    if (currentMasterResume && masterResumeBadge) {
+      masterResumeBadge.innerText = "● Master Resume Loaded";
+      masterResumeBadge.style.color = "var(--success)";
+    }
+    renderProfileFields();
+  }
+
   async function checkAuthSession() {
-    authToken = await resolveAuthToken();
+    await hydrateCachedSession();
+    authToken = authToken || await resolveAuthToken();
 
     if (!authToken) {
       showLoginView();
       return false;
     }
 
+    paintCachedCopilot();
+
     try {
-      const meRes = await fetch("http://localhost:5000/api/auth/me", {
+      const meRes = await fetchWithTimeout("http://localhost:5000/api/auth/me", {
         headers: { Authorization: `Bearer ${authToken}` }
       });
 
-      if (!meRes.ok) throw new Error("Token expired");
+      if (meRes.status === 401 || meRes.status === 403) {
+        chrome.storage.local.remove(["vedha_token", "cachedUser", "candidateProfile", "cachedMasterResume"]);
+        authToken = null;
+        currentUser = null;
+        currentProfile = null;
+        currentMasterResume = null;
+        showLoginView();
+        return false;
+      }
+
+      if (!meRes.ok) throw new Error("Auth service unavailable");
 
       currentUser = await meRes.json();
+      chrome.storage.local.set({ cachedUser: currentUser });
       showCopilotView();
       loadRealUserData();
       return true;
     } catch (_) {
-      chrome.storage.local.remove(["vedha_token", "cachedUser", "candidateProfile", "cachedMasterResume"]);
-      authToken = null;
-      currentUser = null;
-      showLoginView();
-      return false;
+      paintCachedCopilot();
+      if (connectionPill) connectionPill.className = "status-pill";
+      if (connectionText) connectionText.innerText = "Cached session";
+      return true;
     }
   }
 
@@ -305,22 +363,43 @@ document.addEventListener("DOMContentLoaded", async () => {
   // -------------------------------------------------------------
   // 3. Render Real Profile Fields in Tab 4
   // -------------------------------------------------------------
+  function displayOrUnspecified(value) {
+    if (value === null || value === undefined || value === "") return "Not Specified";
+    return String(value);
+  }
+
+  function noticePeriodLabel(days) {
+    if (typeof days === "number" && Number.isFinite(days)) return `${days} Days`;
+    if (typeof days === "string" && days.trim() !== "" && !Number.isNaN(Number(days))) return `${days} Days`;
+    return "Not Specified";
+  }
+
+  function visaSponsorshipLabel(value) {
+    if (value === true) return "Requires Sponsorship";
+    if (value === false) return "Authorized to work (No sponsorship needed)";
+    return "Not Specified";
+  }
+
   function renderProfileFields() {
     if (!profileList) return;
     const pInfo = currentMasterResume?.schema?.personalInfo;
     const eff = currentProfile || {};
+    const salary = eff?.expectedSalary;
+    const salaryLabel = salary === null || salary === undefined || salary === ""
+      ? "Not Specified"
+      : `${eff?.salaryCurrency || "$"} ${salary}`;
 
     const fields = [
-      { key: "Full Name", val: pInfo?.fullName || currentUser?.fullName || eff?.fullName || "Not Specified" },
-      { key: "Email Address", val: pInfo?.email || currentUser?.email || eff?.email || "Not Specified" },
-      { key: "Phone Number", val: eff?.phoneNumber || pInfo?.phone || "Not Specified" },
-      { key: "Location", val: eff?.currentCity || pInfo?.location || "Not Specified" },
-      { key: "LinkedIn URL", val: eff?.linkedInUrl || pInfo?.linkedInUrl || "Not Specified" },
-      { key: "GitHub Profile", val: eff?.githubUrl || pInfo?.gitHubUrl || "Not Specified" },
-      { key: "Portfolio Website", val: eff?.portfolioUrl || pInfo?.portfolioUrl || "Not Specified" },
-      { key: "Notice Period", val: eff?.noticePeriodDays ? `${eff.noticePeriodDays} Days` : "30 Days" },
-      { key: "Expected Salary", val: eff?.expectedSalary ? `${eff?.salaryCurrency || "$"} ${eff.expectedSalary}` : "Negotiable" },
-      { key: "Visa Sponsorship", val: eff?.requiresVisaSponsorship ? "Requires Sponsorship" : "Authorized to work (No sponsorship needed)" },
+      { key: "Full Name", val: displayOrUnspecified(pInfo?.fullName || currentUser?.fullName || eff?.fullName) },
+      { key: "Email Address", val: displayOrUnspecified(pInfo?.email || currentUser?.email || eff?.email) },
+      { key: "Phone Number", val: displayOrUnspecified(eff?.phoneNumber || pInfo?.phone) },
+      { key: "Location", val: displayOrUnspecified(eff?.currentCity || pInfo?.location) },
+      { key: "LinkedIn URL", val: displayOrUnspecified(eff?.linkedInUrl || pInfo?.linkedInUrl) },
+      { key: "GitHub Profile", val: displayOrUnspecified(eff?.githubUrl || pInfo?.gitHubUrl) },
+      { key: "Portfolio Website", val: displayOrUnspecified(eff?.portfolioUrl || pInfo?.portfolioUrl) },
+      { key: "Notice Period", val: noticePeriodLabel(eff?.noticePeriodDays) },
+      { key: "Expected Salary", val: salaryLabel },
+      { key: "Visa Sponsorship", val: visaSponsorshipLabel(eff?.requiresVisaSponsorship) },
     ];
 
     profileList.innerHTML = fields.map(f => `
@@ -424,6 +503,20 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!tab?.id) throw new Error("No active browser tab found.");
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        reject(new Error("Timed out waiting for this page. Career tools stay available."));
+      }, TAB_MESSAGE_TIMEOUT_MS);
+
+      const finish = (fn, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn(value);
+      };
+
       chrome.tabs.sendMessage(tab.id, message, async (res) => {
         if (chrome.runtime.lastError) {
           try {
@@ -434,19 +527,60 @@ document.addEventListener("DOMContentLoaded", async () => {
             await new Promise(r => setTimeout(r, 400));
             chrome.tabs.sendMessage(tab.id, message, (retryRes) => {
               if (chrome.runtime.lastError) {
-                reject(new Error("Please refresh the job page to connect Vedha AI."));
+                finish(reject, new Error("Please refresh the job page to connect Vedha AI."));
               } else {
-                resolve(retryRes);
+                finish(resolve, retryRes);
               }
             });
           } catch (_) {
-            reject(new Error("Please refresh the job page to connect Vedha AI."));
+            finish(reject, new Error("Please refresh the job page to connect Vedha AI."));
           }
         } else {
-          resolve(res);
+          finish(resolve, res);
         }
       });
     });
+  }
+
+  function paintJobCard() {
+    if (jobTitleEl) jobTitleEl.innerText = extractedJob.title;
+    if (jobCompanyEl) jobCompanyEl.innerText = extractedJob.company;
+    if (jobSourceEl) jobSourceEl.innerText = extractedJob.source;
+  }
+
+  function isRestrictedPage(url) {
+    if (!url) return true;
+    const lower = url.toLowerCase();
+    return (
+      lower.startsWith("chrome://") ||
+      lower.startsWith("chrome-extension://") ||
+      lower.startsWith("chrome-untrusted://") ||
+      lower.startsWith("edge://") ||
+      lower.startsWith("about:") ||
+      lower.startsWith("devtools://") ||
+      lower.startsWith("view-source:") ||
+      lower.startsWith("https://chrome.google.com/webstore") ||
+      lower.startsWith("https://chromewebstore.google.com")
+    );
+  }
+
+  function isKnownJobUrl(url) {
+    if (!url) return false;
+    const lower = url.toLowerCase();
+    return (
+      lower.includes("linkedin.com/jobs") ||
+      lower.includes("greenhouse.io") ||
+      lower.includes("lever.co") ||
+      lower.includes("ashbyhq.com") ||
+      lower.includes("myworkdayjobs.com") ||
+      lower.includes("workday.com") ||
+      lower.includes("indeed.com") ||
+      lower.includes("wellfound.com") ||
+      lower.includes("naukri.com") ||
+      lower.includes("/jobs/") ||
+      lower.includes("/job/") ||
+      lower.includes("/careers/")
+    );
   }
 
   // -------------------------------------------------------------
@@ -460,15 +594,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       activeTabId = tab.id;
       activeTabUrl = tab.url || "";
 
-      if (!activeTabUrl || activeTabUrl.startsWith("chrome://") || activeTabUrl.startsWith("chrome-extension://")) {
-        extractedJob = {
-          title: "Universal Careers Mode",
-          company: "Active on any career portal",
-          url: "",
-          source: "Universal Web",
-          description: "",
-          skills: []
-        };
+      if (isRestrictedPage(activeTabUrl) || !isKnownJobUrl(activeTabUrl)) {
+        extractedJob = universalCareersJob();
+        paintJobCard();
+        return;
       } else {
         let source = "Universal Web";
         if (activeTabUrl.includes("linkedin.com")) source = "LinkedIn";
@@ -493,20 +622,11 @@ document.addEventListener("DOMContentLoaded", async () => {
             };
           }
         } catch (_) {
-          extractedJob = {
-            title: tab.title ? tab.title.split("|")[0].split("-")[0].trim() : "Target Position",
-            company: source !== "Universal Web" ? source : "Career Page",
-            url: activeTabUrl,
-            source,
-            description: tab.title || "",
-            skills: []
-          };
+          extractedJob = universalCareersJob();
         }
       }
 
-      if (jobTitleEl) jobTitleEl.innerText = extractedJob.title;
-      if (jobCompanyEl) jobCompanyEl.innerText = extractedJob.company;
-      if (jobSourceEl) jobSourceEl.innerText = extractedJob.source;
+      paintJobCard();
     } catch (err) {
       console.debug("[Vedha AI Popup] Tab sync error:", err);
     }
@@ -896,6 +1016,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     const count = stored[todayKey] || 0;
     if (dailyPacingText) dailyPacingText.innerText = `Daily Safety Limit: ${count} / 25 applications today`;
   });
+
+  // Paint a usable dashboard before any network or content-script wait.
+  extractedJob = universalCareersJob();
+  paintJobCard();
 
   // Initial Boot
   await checkAuthSession();

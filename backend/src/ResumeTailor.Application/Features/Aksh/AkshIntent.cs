@@ -44,6 +44,12 @@ public static partial class AkshIntent
         return urls;
     }
 
+    private static readonly string[] GreetingWords =
+    [
+        "hi", "hello", "hey", "hola", "greetings", "good morning", "good afternoon", "good evening",
+        "sup", "yo", "namaste", "who are you", "what can you do", "help", "how are you", "what is this"
+    ];
+
     public static bool HasContinueIntent(string? text) => ContainsAny(text, ContinueWords);
 
     /// <summary>True when the candidate explicitly asks for package generation.</summary>
@@ -51,6 +57,14 @@ public static partial class AkshIntent
 
     /// <summary>True when the candidate explicitly asks to apply/submit.</summary>
     public static bool HasApplyIntent(string? text) => ContainsAny(text, ApplyWords);
+
+    /// <summary>True when the turn is a conversational greeting, introduction, or general inquiry requiring no tool calls.</summary>
+    public static bool IsGreetingOrGeneralChat(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        var trimmed = text.Trim().TrimEnd('.', '!', '?', ',', ';', ' ').ToLowerInvariant();
+        return GreetingWords.Any(w => trimmed == w || trimmed.StartsWith(w + " ") || trimmed.EndsWith(" " + w));
+    }
 
     /// <summary>First plan step not yet done (skips nulls safely).</summary>
     public static AkshTodoItemDto? NextPendingStep(IEnumerable<AkshTodoItemDto>? todos)

@@ -493,7 +493,8 @@ public class AkshAgentTests : IDisposable
                 .AddInMemoryCollection(new Dictionary<string, string?> { ["Aksh:Enabled"] = "true" })
                 .Build(),
             new ResumeTailor.Infrastructure.Aksh.TokenLedger(_provider.GetRequiredService<IServiceScopeFactory>()),
-            _sender);
+            _sender,
+            new ResumeTailor.Infrastructure.Aksh.Skills.AkshSkillRegistry());
 
         AkshStreamEvent? first = null;
         await foreach (var e in runner.StreamTurnAsync(userId, session.Id, "hi"))

@@ -24,6 +24,9 @@ namespace ResumeTailor.Infrastructure.Aksh;
 public static class AkshTools
 {
     public const string RecallMemory = "recall_memory";
+    public const string GetMasterResume = "get_master_resume";
+    public const string GetCandidateProfile = "get_candidate_profile";
+    public const string GetApplicationQueue = "get_application_queue";
     public const string ScrapeJob = "scrape_job";
     public const string AnswerScreening = "answer_screening";
     public const string PreparePackage = "prepare_package";
@@ -40,6 +43,9 @@ public static class AkshTools
         return new List<AIFunction>
         {
             CreateRecallMemoryForUser(scopes, userId),
+            CreateGetMasterResume(scopes, userId),
+            CreateGetCandidateProfile(scopes, userId),
+            CreateGetApplicationQueue(scopes, userId),
             CreateScrapeJob(scopes, userId, sessionId),
             CreateAnswerScreening(scopes, userId, sessionId),
             CreatePreparePackage(scopes, userId, sessionId),
@@ -79,6 +85,130 @@ public static class AkshTools
         var json = JsonSerializer.Serialize(hits);
         await LedgerAsync(scopes, userId, null, RecallMemory, needle.Length, json.Length, true, cancellationToken);
         return json;
+    }
+
+    public static AIFunction CreateGetMasterResume(IServiceScopeFactory scopes, Guid userId)
+    {
+        async Task<string> GetMasterResumeAsync(string? section, CancellationToken cancellationToken)
+        {
+            using var scope = scopes.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
+
+            var resume = await db.MasterResumes
+                .AsNoTracking()
+                .Where(r => r.UserId == userId && r.IsActive)
+                .OrderByDescending(r => r.UpdatedAtUtc ?? r.CreatedAtUtc)
+                .Select(r => new
+                {
+                    r.Id,
+                    r.Title,
+                    r.VersionNumber,
+                    rawExcerpt = Truncate(r.RawExtractedText, 4000),
+                    r.StructuredJson
+                })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (resume == null)
+            {
+                return JsonSerializer.Serialize(new { message = "No active master resume found for candidate." });
+            }
+
+            var json = JsonSerializer.Serialize(resume);
+            await LedgerAsync(scopes, userId, null, GetMasterResume, 0, json.Length, true, cancellationToken);
+            return json;
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<string?, CancellationToken, Task<string>>)GetMasterResumeAsync,
+            GetMasterResume,
+            "Retrieve the candidate's master resume content, skills, work experience, and schema for review, keyword optimization, or gap analysis. Argument: section (optional).");
+    }
+
+    public static AIFunction CreateGetCandidateProfile(IServiceScopeFactory scopes, Guid userId)
+    {
+        async Task<string> GetProfileAsync(CancellationToken cancellationToken)
+        {
+            using var scope = scopes.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
+
+            var profile = await db.CandidateProfiles
+                .AsNoTracking()
+                .Where(p => p.UserId == userId)
+                .Select(p => new
+                {
+                    p.PhoneNumber,
+                    p.CurrentCity,
+                    p.CurrentCountry,
+                    p.WorkAuthorizationStatus,
+                    p.RequiresVisaSponsorship,
+                    p.NoticePeriodDays,
+                    p.CurrentSalary,
+                    p.ExpectedSalary,
+                    p.SalaryCurrency,
+                    p.WillingToRelocate,
+                    p.RemotePreference,
+                    p.LinkedInUrl,
+                    p.GithubUrl,
+                    p.PortfolioUrl
+                })
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (profile == null)
+            {
+                return JsonSerializer.Serialize(new { message = "No candidate profile found." });
+            }
+
+            var json = JsonSerializer.Serialize(profile);
+            await LedgerAsync(scopes, userId, null, GetCandidateProfile, 0, json.Length, true, cancellationToken);
+            return json;
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<CancellationToken, Task<string>>)GetProfileAsync,
+            GetCandidateProfile,
+            "Retrieve the candidate's profile preferences, work authorization, notice period, compensation, and portfolio links.");
+    }
+
+    public static AIFunction CreateGetApplicationQueue(IServiceScopeFactory scopes, Guid userId)
+    {
+        async Task<string> GetQueueAsync(string? statusFilter, CancellationToken cancellationToken)
+        {
+            using var scope = scopes.CreateScope();
+            var db = scope.ServiceProvider.GetRequiredService<IApplicationDbContext>();
+
+            var query = db.ApplicationQueueItems
+                .AsNoTracking()
+                .Where(q => q.UserId == userId);
+
+            if (!string.IsNullOrWhiteSpace(statusFilter) && Enum.TryParse<PipelineExecutionStatus>(statusFilter, true, out var status))
+            {
+                query = query.Where(q => q.Status == status);
+            }
+
+            var items = await query
+                .OrderByDescending(q => q.CreatedAtUtc)
+                .Take(10)
+                .Select(q => new
+                {
+                    q.Id,
+                    company = q.TargetCompany,
+                    role = q.TargetRole,
+                    q.JobUrl,
+                    status = q.Status.ToString(),
+                    q.CreatedAtUtc,
+                    q.ErrorMessage
+                })
+                .ToListAsync(cancellationToken);
+
+            var json = JsonSerializer.Serialize(items);
+            await LedgerAsync(scopes, userId, null, GetApplicationQueue, 0, json.Length, true, cancellationToken);
+            return json;
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<string?, CancellationToken, Task<string>>)GetQueueAsync,
+            GetApplicationQueue,
+            "Retrieve recent job application queue items and their execution status (submitted, paused for review, queued, failed). Argument: statusFilter (optional string).");
     }
 
     public static AIFunction CreateScrapeJob(IServiceScopeFactory scopes, Guid userId, Guid sessionId)
@@ -194,10 +324,14 @@ public static class AkshTools
                 ? JsonSerializer.Serialize(new
                 {
                     queueItemId = result.Value!.Id,
+                    generatedResumeId = result.Value.GeneratedResumeId,
                     company = result.Value.TargetCompany,
                     role = result.Value.TargetRole,
                     status = result.Value.Status.ToString(),
                     requiresManualReview = result.Value.RequiresManualReview,
+                    resumePdfDownloadUrl = result.Value.GeneratedResumeId.HasValue
+                        ? $"/api/resumes/{result.Value.GeneratedResumeId.Value}/export?format=Pdf"
+                        : null,
                 })
                 : JsonSerializer.Serialize(new { error = result.Error ?? "Package preparation failed." });
 

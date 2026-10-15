@@ -618,23 +618,52 @@ public class GeminiProvider : IAiProvider
                 response = await _httpClient.SendAsync(request, cancellationToken);
                 responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
 
-                if (response.StatusCode == System.Net.HttpStatusCode.NotFound && !model.Contains("gemini-flash-lite-latest"))
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
-                    _logger.LogWarning("Gemini model '{Model}' returned 404 Not Found. Retrying with fallback model gemini-flash-lite-latest...", model);
-                    model = "gemini-flash-lite-latest";
-                    url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
-                    body = new
+                    var nextModel = GetNextFallbackModel(model);
+                    if (!string.IsNullOrEmpty(nextModel) && !string.Equals(nextModel, model, StringComparison.OrdinalIgnoreCase))
                     {
-                        system_instruction = new { parts = new[] { new { text = systemPrompt + "\nIMPORTANT: Return ONLY valid raw JSON matching the required schema without markdown code fences." } } },
-                        contents = new[] { new { parts = new[] { new { text = userPrompt } } } },
-                        generationConfig = CreateGenerationConfig(maxTokens, 0.2, true, model)
-                    };
-                    continue;
+                        _logger.LogWarning("Gemini model '{Model}' returned 404 Not Found. Retrying with fallback model {NextModel}...", model, nextModel);
+                        model = nextModel;
+                        url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
+                        body = new
+                        {
+                            system_instruction = new { parts = new[] { new { text = systemPrompt + "\nIMPORTANT: Return ONLY valid raw JSON matching the required schema without markdown code fences." } } },
+                            contents = new[] { new { parts = new[] { new { text = userPrompt } } } },
+                            generationConfig = CreateGenerationConfig(maxTokens, 0.2, true, model)
+                        };
+                        continue;
+                    }
                 }
 
-                if ((response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable || (int)response.StatusCode == 429) && attempt < 3)
+                var isTransientServerError = response.StatusCode == System.Net.HttpStatusCode.InternalServerError
+                    || response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable
+                    || response.StatusCode == System.Net.HttpStatusCode.BadGateway
+                    || response.StatusCode == System.Net.HttpStatusCode.GatewayTimeout
+                    || (int)response.StatusCode == 429;
+
+                if (isTransientServerError && attempt < 3)
                 {
                     _logger.LogWarning("Gemini API transient {StatusCode} on attempt {Attempt}. Retrying in {Delay}ms...", response.StatusCode, attempt, attempt * 1500);
+
+                    // On 500 InternalServerError or 503 ServiceUnavailable, cascade to next model
+                    if (response.StatusCode == System.Net.HttpStatusCode.InternalServerError || response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
+                    {
+                        var nextModel = GetNextFallbackModel(model);
+                        if (!string.IsNullOrEmpty(nextModel) && !string.Equals(nextModel, model, StringComparison.OrdinalIgnoreCase))
+                        {
+                            _logger.LogWarning("Gemini returned {StatusCode} on '{Model}'. Cascading to fallback model {NextModel}...", response.StatusCode, model, nextModel);
+                            model = nextModel;
+                            url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
+                            body = new
+                            {
+                                system_instruction = new { parts = new[] { new { text = systemPrompt + "\nIMPORTANT: Return ONLY valid raw JSON matching the required schema without markdown code fences." } } },
+                                contents = new[] { new { parts = new[] { new { text = userPrompt } } } },
+                                generationConfig = CreateGenerationConfig(maxTokens, 0.2, true, model)
+                            };
+                        }
+                    }
+
                     await Task.Delay(attempt * 1500, cancellationToken);
                     continue;
                 }
@@ -729,23 +758,52 @@ public class GeminiProvider : IAiProvider
                     response = await _httpClient.SendAsync(request, cancellationToken);
                     responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
 
-                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound && !model.Contains("gemini-flash-lite-latest"))
+                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                     {
-                        _logger.LogWarning("Gemini model '{Model}' returned 404 Not Found. Retrying with fallback model gemini-flash-lite-latest...", model);
-                        model = "gemini-flash-lite-latest";
-                        url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
-                        body = new
+                        var nextModel = GetNextFallbackModel(model);
+                        if (!string.IsNullOrEmpty(nextModel) && !string.Equals(nextModel, model, StringComparison.OrdinalIgnoreCase))
                         {
-                            system_instruction = new { parts = new[] { new { text = systemPrompt } } },
-                            contents = new[] { new { parts = new[] { new { text = userPrompt } } } },
-                            generationConfig = CreateGenerationConfig(maxTokens, 0.2, false, model)
-                        };
-                        continue;
+                            _logger.LogWarning("Gemini model '{Model}' returned 404 Not Found. Retrying with fallback model {NextModel}...", model, nextModel);
+                            model = nextModel;
+                            url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
+                            body = new
+                            {
+                                system_instruction = new { parts = new[] { new { text = systemPrompt } } },
+                                contents = new[] { new { parts = new[] { new { text = userPrompt } } } },
+                                generationConfig = CreateGenerationConfig(maxTokens, 0.2, false, model)
+                            };
+                            continue;
+                        }
                     }
 
-                    if ((response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable || (int)response.StatusCode == 429) && attempt < 3)
+                    var isTransientServerError = response.StatusCode == System.Net.HttpStatusCode.InternalServerError
+                        || response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable
+                        || response.StatusCode == System.Net.HttpStatusCode.BadGateway
+                        || response.StatusCode == System.Net.HttpStatusCode.GatewayTimeout
+                        || (int)response.StatusCode == 429;
+
+                    if (isTransientServerError && attempt < 3)
                     {
                         _logger.LogWarning("Gemini API transient {StatusCode} on attempt {Attempt}. Retrying in {Delay}ms...", response.StatusCode, attempt, attempt * 1500);
+
+                        // On 500 InternalServerError or 503 ServiceUnavailable, cascade to next model
+                        if (response.StatusCode == System.Net.HttpStatusCode.InternalServerError || response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
+                        {
+                            var nextModel = GetNextFallbackModel(model);
+                            if (!string.IsNullOrEmpty(nextModel) && !string.Equals(nextModel, model, StringComparison.OrdinalIgnoreCase))
+                            {
+                                _logger.LogWarning("Gemini returned {StatusCode} on '{Model}'. Cascading to fallback model {NextModel}...", response.StatusCode, model, nextModel);
+                                model = nextModel;
+                                url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
+                                body = new
+                                {
+                                    system_instruction = new { parts = new[] { new { text = systemPrompt } } },
+                                    contents = new[] { new { parts = new[] { new { text = userPrompt } } } },
+                                    generationConfig = CreateGenerationConfig(maxTokens, 0.2, false, model)
+                                };
+                            }
+                        }
+
                         await Task.Delay(attempt * 1500, cancellationToken);
                         continue;
                     }
@@ -962,17 +1020,39 @@ public class GeminiProvider : IAiProvider
                 response = await _httpClient.SendAsync(request, cancellationToken);
                 responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
 
-                if (response.StatusCode == System.Net.HttpStatusCode.NotFound && !model.Contains("gemini-flash-lite-latest"))
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                 {
-                    _logger.LogWarning("Gemini document parse model '{Model}' returned 404 Not Found. Retrying with fallback model gemini-flash-lite-latest...", model);
-                    model = "gemini-flash-lite-latest";
-                    url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
-                    continue;
+                    var nextModel = GetNextFallbackModel(model);
+                    if (!string.IsNullOrEmpty(nextModel) && !string.Equals(nextModel, model, StringComparison.OrdinalIgnoreCase))
+                    {
+                        _logger.LogWarning("Gemini document parse model '{Model}' returned 404 Not Found. Retrying with fallback model {NextModel}...", model, nextModel);
+                        model = nextModel;
+                        url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
+                        continue;
+                    }
                 }
 
-                if ((response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable || (int)response.StatusCode == 429) && attempt < 3)
+                var isTransientServerError = response.StatusCode == System.Net.HttpStatusCode.InternalServerError
+                    || response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable
+                    || response.StatusCode == System.Net.HttpStatusCode.BadGateway
+                    || response.StatusCode == System.Net.HttpStatusCode.GatewayTimeout
+                    || (int)response.StatusCode == 429;
+
+                if (isTransientServerError && attempt < 3)
                 {
-                    _logger.LogWarning("Gemini document parse transient {StatusCode} on attempt {Attempt}. Retrying...", response.StatusCode, attempt);
+                    _logger.LogWarning("Gemini document parse transient {StatusCode} on attempt {Attempt}. Retrying in {Delay}ms...", response.StatusCode, attempt, attempt * 1500);
+
+                    if (response.StatusCode == System.Net.HttpStatusCode.InternalServerError || response.StatusCode == System.Net.HttpStatusCode.ServiceUnavailable)
+                    {
+                        var nextModel = GetNextFallbackModel(model);
+                        if (!string.IsNullOrEmpty(nextModel) && !string.Equals(nextModel, model, StringComparison.OrdinalIgnoreCase))
+                        {
+                            _logger.LogWarning("Gemini returned {StatusCode} on '{Model}'. Cascading to fallback model {NextModel}...", response.StatusCode, model, nextModel);
+                            model = nextModel;
+                            url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
+                        }
+                    }
+
                     await Task.Delay(attempt * 1500, cancellationToken);
                     continue;
                 }
@@ -1060,11 +1140,34 @@ public class GeminiProvider : IAiProvider
     /// untouched — never downgraded (a previous revision forced 2.x/3.x Flash
     /// names onto lite, which would silently reroute an explicit 3.8 choice).
     /// Only unset + explicit lite aliases resolve to lite-latest.
-    /// </summary>
+    private static readonly string[] ModelFallbackSequence =
+    [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-flash-lite-latest"
+    ];
+
+    private static string? GetNextFallbackModel(string currentModel)
+    {
+        var idx = Array.FindIndex(ModelFallbackSequence, m => string.Equals(m, currentModel, StringComparison.OrdinalIgnoreCase));
+        if (idx >= 0 && idx < ModelFallbackSequence.Length - 1)
+        {
+            return ModelFallbackSequence[idx + 1];
+        }
+
+        if (idx < 0)
+        {
+            return ModelFallbackSequence[0];
+        }
+
+        return null;
+    }
+
     private static string ResolveModelName(string? modelName)
     {
         if (string.IsNullOrWhiteSpace(modelName))
-            return "gemini-flash-lite-latest";
+            return "gemini-2.5-flash";
 
         var clean = modelName.Trim();
         if (string.Equals(clean, "gemini-2.5-flash-lite", StringComparison.OrdinalIgnoreCase) ||

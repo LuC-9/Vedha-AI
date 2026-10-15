@@ -128,6 +128,8 @@ services:
       - AGENTQL_API_KEY=${AGENTQL_API_KEY}
       - RESIDENTIAL_PROXY_URL=${RESIDENTIAL_PROXY_URL}
       - WORKER_STEALTH_ENGINE=${WORKER_STEALTH_ENGINE:-patchright}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
     networks:
       - vedha-network
 

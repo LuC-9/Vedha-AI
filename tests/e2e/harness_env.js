@@ -1499,6 +1499,7 @@ function loadExtensionContentScript(env) {
     manageModalStacking: typeof manageModalStacking !== 'undefined' ? manageModalStacking : null,
     injectFloatingCopilotWidget: typeof injectFloatingCopilotWidget !== 'undefined' ? injectFloatingCopilotWidget : null,
     setNativeValue: typeof setNativeValue !== 'undefined' ? setNativeValue : null,
+    setNativeChecked: typeof setNativeChecked !== 'undefined' ? setNativeChecked : null,
     showCopilotReviewHud: typeof showCopilotReviewHud !== 'undefined' ? showCopilotReviewHud : null,
     extractFormQuestions: typeof extractFormQuestions !== 'undefined' ? extractFormQuestions : null,
     resolveScreeningAnswer: typeof resolveScreeningAnswer !== 'undefined' ? resolveScreeningAnswer : null,
@@ -1507,7 +1508,8 @@ function loadExtensionContentScript(env) {
     findEasyApplyModal: typeof findEasyApplyModal !== 'undefined' ? findEasyApplyModal : null,
     isMsgOrChatElement: typeof isMsgOrChatElement !== 'undefined' ? isMsgOrChatElement : null,
     clickElementNaturally: typeof clickElementNaturally !== 'undefined' ? clickElementNaturally : null,
-    waitForEasyApplySurface: typeof waitForEasyApplySurface !== 'undefined' ? waitForEasyApplySurface : null
+    waitForEasyApplySurface: typeof waitForEasyApplySurface !== 'undefined' ? waitForEasyApplySurface : null,
+    extractJobDetails: typeof extractJobDetails !== 'undefined' ? extractJobDetails : null
   };
 `;
   const modifiedCode = rawCode.replace(/\n\s*\}\)\(\);?\s*$/, `${hook}\n})();`);

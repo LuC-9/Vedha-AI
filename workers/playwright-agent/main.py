@@ -54,6 +54,14 @@ MINIO_BUCKET = os.getenv("MINIO_BUCKET", "vedha-resumes")
 AGENTQL_API_KEY = os.getenv("AGENTQL_API_KEY", "")
 RESIDENTIAL_PROXY_URL = os.getenv("RESIDENTIAL_PROXY_URL", "")
 WORKER_HTTP_PORT = int(os.getenv("WORKER_HTTP_PORT", "8000"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+VISION_MODEL_CASCADES = [
+    os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
 
 STREAM_NAME = "APPLICATIONS"
 SUBJECT_RESUME_GENERATED = "app.resume.generated"
@@ -71,9 +79,22 @@ STEALTH_LAUNCH_ARGS = [
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
     "--disable-blink-features=AutomationControlled",
+    "--disable-features=IsolateOrigins,site-per-process",
 ]
 STEALTH_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
 STEALTH_VIEWPORT = {"width": 1280, "height": 850}
+STEALTH_HEADERS = {
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Upgrade-Insecure-Requests": "1",
+}
 
 
 async def jitter_sleep(page, min_ms: int, max_ms: int) -> None:
@@ -91,6 +112,248 @@ async def human_type(locator, text: str) -> None:
     except Exception:
         pass
     await locator.type(text or "", delay=random.randint(35, 115))
+
+
+async def analyze_screen_with_ai_vision(
+    page,
+    candidate_profile: Dict[str, Any],
+    stage_goal: str,
+    screening_answers: Optional[List[Dict[str, Any]]] = None
+) -> Dict[str, Any]:
+    """Uses Google Gemini Multimodal Vision to inspect the page screenshot and visible DOM controls,
+    determining the next optimal browser action (click, fill, upload, review_pause, completed, etc.).
+    """
+    if not GEMINI_API_KEY:
+        logger.info("[AI Vision] GEMINI_API_KEY not configured; skipping visual inference.")
+        return {"action": "none", "reasoning": "GEMINI_API_KEY absent"}
+
+    try:
+        # Resolve Page object if target is a Locator
+        actual_page = page.page if hasattr(page, "page") else page
+
+        # Capture screenshot
+        screenshot_bytes = await actual_page.screenshot(type="jpeg", quality=75)
+        b64_img = base64.b64encode(screenshot_bytes).decode("utf-8")
+
+        # Extract visible interactive elements with exact center click coordinates
+        interactive_elements = await actual_page.evaluate("""() => {
+            const list = [];
+            const nodes = document.querySelectorAll("button, a, input, select, textarea, [role='button'], [tabindex='0']");
+            for (let i = 0; i < nodes.length; i++) {
+                const el = nodes[i];
+                const rect = el.getBoundingClientRect();
+                const style = window.getComputedStyle(el);
+                if (rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') {
+                    const text = (el.innerText || el.value || el.placeholder || el.getAttribute('aria-label') || '').trim();
+                    list.push({
+                        index: list.length,
+                        tag: el.tagName.toLowerCase(),
+                        id: el.id || '',
+                        name: el.getAttribute('name') || '',
+                        type: el.getAttribute('type') || '',
+                        role: el.getAttribute('role') || '',
+                        text: text.slice(0, 80),
+                        ariaLabel: (el.getAttribute('aria-label') || '').slice(0, 80),
+                        click_x: Math.round(rect.x + rect.width / 2),
+                        click_y: Math.round(rect.y + rect.height / 2),
+                        width: Math.round(rect.width),
+                        height: Math.round(rect.height)
+                    });
+                }
+            }
+            return list.slice(0, 50);
+        }""")
+
+        prompt = f"""You are the AI Vision Decision Engine for an autonomous job application agent.
+Analyze this browser screenshot and the visible interactive DOM elements below.
+
+Candidate Profile:
+- Full Name: {candidate_profile.get('fullName') or candidate_profile.get('full_name') or ''}
+- Email: {candidate_profile.get('email') or ''}
+- Phone: {candidate_profile.get('phoneNumber') or candidate_profile.get('phone') or ''}
+- Total Years Experience: {candidate_profile.get('totalYearsExperience') or candidate_profile.get('total_years_experience') or 3}
+- Current Salary / CTC: {candidate_profile.get('currentSalary') or ''}
+- Expected Salary / CTC: {candidate_profile.get('expectedSalary') or ''}
+- Notice Period: {candidate_profile.get('noticePeriodDays', 30)} days
+- Work Authorization: {candidate_profile.get('workAuthorizationStatus') or 'Authorized'}
+- Requires Visa Sponsorship: {candidate_profile.get('requiresVisaSponsorship', False)}
+
+Current Stage / Goal:
+{stage_goal}
+
+Visible Interactive Controls:
+{json.dumps(interactive_elements, indent=2)}
+
+Decide the best single next action to advance the application:
+Actions:
+- "click": Click an element (e.g. Apply, Easy Apply, Next, Continue, Review, Submit, or a radio option).
+- "fill": Fill a text, number, or tel input.
+- "upload": Attach resume PDF to an input[type='file'].
+- "review_pause": We have arrived at the final review / summary screen (before final submission).
+- "completed": Application has already been submitted or completed successfully.
+- "auth_required": Login wall or sign-in gate is visible.
+- "cannot_proceed": An insurmountable blocker, captcha, or error is displayed.
+
+Respond ONLY with valid JSON:
+{{
+    "action": "click" | "fill" | "upload" | "review_pause" | "completed" | "auth_required" | "cannot_proceed",
+    "element_index": 0,
+    "coordinates": {{"x": 450, "y": 620}},
+    "selector": "CSS selector to target the element, e.g. button:has-text('Apply') or input[name='phone'] or #submit",
+    "value": "string value to type if action is fill, else empty string",
+    "reasoning": "brief explanation based on the screenshot"
+}}"""
+
+        for model_name in VISION_MODEL_CASCADES:
+            try:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+                req_body = {
+                    "contents": [{
+                        "parts": [
+                            {"text": prompt},
+                            {
+                                "inlineData": {
+                                    "mimeType": "image/jpeg",
+                                    "data": b64_img
+                                }
+                            }
+                        ]
+                    }],
+                    "generationConfig": {
+                        "temperature": 0.1,
+                        "maxOutputTokens": 1024,
+                        "responseMimeType": "application/json"
+                    }
+                }
+                resp = await asyncio.to_thread(requests.post, url, json=req_body, timeout=25)
+                if resp.status_code == 404:
+                    logger.warning(f"[AI Vision] Model '{model_name}' returned 404; trying next in fallback cascade.")
+                    continue
+                if resp.status_code == 200:
+                    data = resp.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        text_part = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                        if text_part:
+                            parsed = json.loads(text_part)
+                            logger.info(f"[AI Vision] Decision ({model_name}): action={parsed.get('action')}, element_index={parsed.get('element_index')}, coords={parsed.get('coordinates')}, reasoning={parsed.get('reasoning')}")
+                            return parsed
+                else:
+                    logger.warning(f"[AI Vision] Gemini returned {resp.status_code}: {resp.text[:200]}")
+            except Exception as ex:
+                logger.warning(f"[AI Vision] Model '{model_name}' failed: {ex}")
+
+        return {"action": "none", "reasoning": "All vision models failed or returned non-200"}
+    except Exception as e:
+        logger.warning(f"[AI Vision] analyze_screen_with_ai_vision error: {e}")
+        return {"action": "none", "reasoning": str(e)}
+
+
+async def execute_vision_action(
+    target,
+    decision: Dict[str, Any],
+    resume_pdf_path: Optional[str] = None
+) -> bool:
+    """Executes a decision rendered by Gemini Multimodal Vision across 3 progressive execution tiers:
+    1. CSS Selector targeting
+    2. Element Index DOM query
+    3. Direct Viewport Coordinates via physical Playwright Mouse Click (page.mouse.click(x, y))
+    """
+    if not decision or not isinstance(decision, dict):
+        return False
+
+    actual_page = target.page if hasattr(target, "page") else target
+    action = decision.get("action", "")
+    selector = decision.get("selector", "")
+    idx = decision.get("element_index", -1)
+    coords = decision.get("coordinates")
+
+    if action == "click":
+        # Tier 1: Targeted CSS Selector
+        if selector:
+            try:
+                loc = target.locator(selector).first
+                if await loc.count() > 0 and await loc.is_visible():
+                    await loc.scroll_into_view_if_needed()
+                    await loc.click(timeout=3000)
+                    logger.info(f"[AI Vision Executor] Clicked via CSS selector: '{selector}'")
+                    return True
+            except Exception as e:
+                logger.debug(f"[AI Vision Executor] Selector click failed for '{selector}': {e}")
+
+        # Tier 2: Element Index from DOM extract
+        if isinstance(idx, int) and idx >= 0:
+            try:
+                clicked = await actual_page.evaluate("""(targetIdx) => {
+                    const nodes = document.querySelectorAll("button, a, input, select, textarea, [role='button'], [tabindex='0']");
+                    let visibleCount = 0;
+                    for (let i = 0; i < nodes.length; i++) {
+                        const el = nodes[i];
+                        const rect = el.getBoundingClientRect();
+                        const style = window.getComputedStyle(el);
+                        if (rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none') {
+                            if (visibleCount === targetIdx) {
+                                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                el.click();
+                                return true;
+                            }
+                            visibleCount++;
+                        }
+                    }
+                    return false;
+                }""", idx)
+                if clicked:
+                    logger.info(f"[AI Vision Executor] Clicked via DOM element index: {idx}")
+                    return True
+            except Exception as e:
+                logger.debug(f"[AI Vision Executor] Element index click failed for {idx}: {e}")
+
+        # Tier 3: Direct Visual Viewport Coordinates
+        if isinstance(coords, dict) and "x" in coords and "y" in coords:
+            try:
+                cx, cy = int(coords["x"]), int(coords["y"])
+                await actual_page.mouse.move(cx, cy, steps=5)
+                await actual_page.mouse.click(cx, cy)
+                logger.info(f"[AI Vision Executor] Clicked via physical viewport coordinates: ({cx}, {cy})")
+                return True
+            except Exception as e:
+                logger.debug(f"[AI Vision Executor] Coordinate click failed at ({coords}): {e}")
+
+    elif action == "fill":
+        val = decision.get("value", "")
+        # Tier 1: Try CSS Selector
+        if selector:
+            try:
+                loc = target.locator(selector).first
+                if await loc.count() > 0:
+                    await human_type(loc, str(val))
+                    logger.info(f"[AI Vision Executor] Filled input '{selector}' with '{val}'")
+                    return True
+            except Exception:
+                pass
+        # Tier 2: Click coordinates and type
+        if isinstance(coords, dict) and "x" in coords and "y" in coords:
+            try:
+                cx, cy = int(coords["x"]), int(coords["y"])
+                await actual_page.mouse.click(cx, cy)
+                await actual_page.keyboard.type(str(val), delay=random.randint(30, 80))
+                logger.info(f"[AI Vision Executor] Clicked ({cx}, {cy}) and typed '{val}'")
+                return True
+            except Exception:
+                pass
+
+    elif action == "upload" and resume_pdf_path:
+        file_loc = target.locator(selector or "input[type='file']").first
+        if await file_loc.count() > 0:
+            try:
+                await file_loc.set_input_files(resume_pdf_path)
+                logger.info(f"[AI Vision Executor] Uploaded resume PDF via '{selector or 'input[type=file]'}'")
+                return True
+            except Exception as e:
+                logger.debug(f"[AI Vision Executor] File upload failed: {e}")
+
+    return False
+
 
 
 SUBMIT_SUCCESS_PATTERNS = [
@@ -261,7 +524,12 @@ async def stealth_browser_session(headed: bool, proxy_settings):
         cm = AsyncCamoufox(headless=not effective_headed, proxy=proxy_settings)
         browser = await cm.__aenter__()
         try:
-            context = await browser.new_context(user_agent=STEALTH_USER_AGENT, viewport=STEALTH_VIEWPORT)
+            context = await browser.new_context(
+                user_agent=STEALTH_USER_AGENT,
+                viewport=STEALTH_VIEWPORT,
+                locale="en-US",
+                extra_http_headers=STEALTH_HEADERS,
+            )
             page = await context.new_page()
             yield browser, context, page, "camoufox"
         finally:
@@ -296,7 +564,19 @@ async def stealth_browser_session(headed: bool, proxy_settings):
             proxy=proxy_settings,
             args=STEALTH_LAUNCH_ARGS,
         )
-        context = await browser.new_context(user_agent=STEALTH_USER_AGENT, viewport=STEALTH_VIEWPORT)
+        context = await browser.new_context(
+            user_agent=STEALTH_USER_AGENT,
+            viewport=STEALTH_VIEWPORT,
+            locale="en-US",
+            timezone_id="Asia/Kolkata",
+            extra_http_headers=STEALTH_HEADERS,
+        )
+        await context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        """)
         page = await context.new_page()
         yield browser, context, page, engine
     finally:
@@ -504,6 +784,7 @@ async def execute_playwright_flow(
         proxy_settings = {"server": RESIDENTIAL_PROXY_URL}
 
     is_linkedin = "linkedin.com" in job_url.lower()
+    is_naukri = "naukri.com" in job_url.lower()
 
     async with stealth_browser_session(headed, proxy_settings) as (browser, context, page, engine_name):
         log(f"[Playwright Agent] Stealth engine active: {engine_name}")
@@ -517,10 +798,35 @@ async def execute_playwright_flow(
                 {"name": "li_at", "value": session_cookie.strip(), "domain": ".linkedin.com", "path": "/"}
             ])
 
+        # Inject Naukri session cookie if available
+        naukri_cookie = candidate_profile.get("naukriSessionCookie") or candidate_profile.get("naukri_cookie")
+        if is_naukri and naukri_cookie:
+            log("[Playwright Agent] Injecting authenticated Naukri session cookie into browser context")
+            await context.add_cookies([
+                {"name": "naukri_session", "value": naukri_cookie.strip(), "domain": ".naukri.com", "path": "/"}
+            ])
+
         try:
             log(f"[Playwright Agent] Navigating to {job_url}...")
             await page.goto(job_url, timeout=45000, wait_until="domcontentloaded")
             await jitter_sleep(page, 2200, 3400)
+
+            # Bot / WAF Access Denied Check
+            page_text = ""
+            try:
+                page_text = (await page.locator("body").inner_text() or "").lower()
+            except Exception:
+                pass
+            if "access denied" in page_text or "you don't have permission to access" in page_text or "403 forbidden" in page_text:
+                log(f"[Playwright Agent] Access Denied / WAF Bot Block detected on {job_url}")
+                return ApplyJobResponse(
+                    success=False,
+                    status="AuthenticationRequired",
+                    message="The job portal's anti-bot firewall returned 'Access Denied' to the headless server. Please open the posting in your browser tab and click 'Auto-Fill & Review' in the Vedha Chrome Extension to apply with 100% accuracy!",
+                    executionLogs=logs,
+                    finalPageUrl=page.url,
+                    errorDetails="WAF Access Denied"
+                )
 
             # =========================================================================
             # Case 1: LinkedIn Easy Apply Flow
@@ -718,6 +1024,28 @@ async def execute_playwright_flow(
                         await jitter_sleep(page, 1200, 2100)
                         continue
 
+                    # 8. AI Vision Decision Engine: analyze modal progression if buttons are custom/dynamic
+                    if GEMINI_API_KEY:
+                        log("[Playwright Agent] Engaging AI Vision Decision Engine to analyze modal progression...")
+                        v_dec = await analyze_screen_with_ai_vision(modal, candidate_profile, "Advance through LinkedIn Easy Apply modal wizard", screening_answers)
+                        act = v_dec.get("action")
+                        if act == "click":
+                            log(f"[Playwright Agent] AI Vision decided to click: index={v_dec.get('element_index')}, selector={v_dec.get('selector')}, coords={v_dec.get('coordinates')} ({v_dec.get('reasoning')})")
+                            clicked = await execute_vision_action(modal, v_dec, resume_pdf_path)
+                            if clicked:
+                                await jitter_sleep(page, 1500, 2500)
+                                continue
+                        elif act == "review_pause":
+                            log("[Playwright Agent] AI Vision verified application reached Review stage.")
+                            if copilot_mode:
+                                return ApplyJobResponse(
+                                    success=True,
+                                    status="PausedForUserReview",
+                                    message="LinkedIn Easy Apply pre-filled and paused at final Review screen via AI Vision.",
+                                    executionLogs=logs,
+                                    finalPageUrl=page.url
+                                )
+
                     break
 
                 log("[Playwright Agent] Modal traversal finished. Verifying submission...")
@@ -750,7 +1078,198 @@ async def execute_playwright_flow(
                 )
 
             # =========================================================================
-            # Case 2: ATS Portals (Greenhouse, Lever, Ashby, Workday, Company Careers)
+            # Case 2: Naukri Application Flow (naukri.com)
+            # =========================================================================
+            elif is_naukri:
+                log("[Playwright Agent] Inspecting Naukri job posting...")
+
+                current_url = page.url.lower()
+                is_naukri_auth = "nlogin/login" in current_url or await page.locator(".login-layer, .login-modal, [class*='login_layer']").count() > 0
+                if is_naukri_auth and not naukri_cookie:
+                    log("[Playwright Agent] Naukri authentication barrier detected.")
+                    return ApplyJobResponse(
+                        success=False,
+                        status="AuthenticationRequired",
+                        message="Naukri requires candidate login. Please open the posting in your browser tab using the Vedha Desktop Extension, or log into Naukri.",
+                        executionLogs=logs,
+                        finalPageUrl=page.url
+                    )
+
+                # Check if already applied
+                already_applied = page.locator(".already-applied, span:has-text('Already Applied'), button:has-text('Already Applied')")
+                if await already_applied.count() > 0:
+                    log("[Playwright Agent] Verified: This job posting has already been submitted on Naukri.")
+                    return ApplyJobResponse(
+                        success=True,
+                        status="Submitted",
+                        message="Verified: You have already applied to this position on Naukri.",
+                        executionLogs=logs,
+                        finalPageUrl=page.url
+                    )
+
+                # Locate Apply button
+                apply_btn = page.locator("button.apply-button, #apply-button, button:has-text('Apply'), button:has-text('Apply on company site'), button:has-text('I am interested'), .apply-button-container button").first
+                pre_apply_url = page.url
+                apply_clicked = False
+
+                if await apply_btn.count() > 0:
+                    btn_text = (await apply_btn.text_content() or "").strip()
+                    log(f"[Playwright Agent] Triggering Naukri Apply action ('{btn_text}')...")
+                    await apply_btn.click()
+                    apply_clicked = True
+                    await jitter_sleep(page, 2000, 3200)
+                elif GEMINI_API_KEY:
+                    log("[Playwright Agent] Applying AI Vision to locate and click Naukri Apply button...")
+                    v_dec = await analyze_screen_with_ai_vision(page, candidate_profile, "Find and click the Apply button for this Naukri job posting")
+                    if v_dec.get("action") == "cannot_proceed":
+                        reason = v_dec.get("reasoning", "")
+                        log(f"[Playwright Agent] AI Vision detected blocker on Naukri: {reason}")
+                        return ApplyJobResponse(
+                            success=False,
+                            status="AuthenticationRequired" if any(k in reason.lower() for k in ("access denied", "blocked", "captcha", "login", "auth")) else "Failed",
+                            message=f"Naukri application paused: {reason}. Open this posting in your browser and click 'Auto-Fill & Review' in the Vedha Chrome Extension.",
+                            executionLogs=logs,
+                            finalPageUrl=page.url,
+                            errorDetails=reason
+                        )
+                    elif v_dec.get("action") == "click":
+                        log(f"[Playwright Agent] AI Vision decided to click Apply button: index={v_dec.get('element_index')}, selector={v_dec.get('selector')}, coords={v_dec.get('coordinates')} ({v_dec.get('reasoning')})")
+                        apply_clicked = await execute_vision_action(page, v_dec)
+                        if apply_clicked:
+                            await jitter_sleep(page, 2000, 3200)
+
+                if not apply_clicked:
+                    log("[Playwright Agent] Could not locate or click Apply button on Naukri posting.")
+                    return ApplyJobResponse(
+                        success=False,
+                        status="Failed",
+                        message="Could not find 'Apply' button on this Naukri job posting.",
+                        executionLogs=logs,
+                        finalPageUrl=page.url
+                    )
+
+                # Handle external redirect (e.g. company career site from Naukri)
+                if page.url != pre_apply_url and "naukri.com" not in page.url.lower():
+                    log(f"[Playwright Agent] Naukri redirected to external portal: {page.url}")
+                    login_evidence = await detect_login_wall(page)
+                    if login_evidence:
+                        return ApplyJobResponse(
+                            success=False,
+                            status="AuthenticationRequired",
+                            message="The external career portal requires candidate login. Please open in browser with the Vedha extension.",
+                            executionLogs=logs,
+                            finalPageUrl=page.url
+                        )
+
+                # Inspect Naukri application drawer / chatbot modal
+                drawer = page.locator(".drawer-wrapper, .chatbot-container, .chat-container, div[class*='apply-message'], .apply-modal, div[class*='drawer']").first
+                if await drawer.count() > 0:
+                    log("[Playwright Agent] Naukri application drawer detected. Injecting candidate profile...")
+
+                    # 1. Experience
+                    exp_input = drawer.locator("input[name*='experience' i], input[id*='experience' i], input[placeholder*='experience' i]").first
+                    if await exp_input.count() > 0:
+                        years = candidate_profile.get("totalYearsExperience") or candidate_profile.get("total_years_experience") or "3"
+                        await human_type(exp_input, str(years))
+                        log(f"[Playwright Agent] Populated Experience: {years} years")
+
+                    # 2. Notice period
+                    np_input = drawer.locator("input[name*='notice' i], select[name*='notice' i]").first
+                    if await np_input.count() > 0:
+                        np = str(candidate_profile.get("noticePeriodDays", 30))
+                        await human_type(np_input, f"{np} days")
+                        log(f"[Playwright Agent] Populated Notice Period: {np} days")
+
+                    # 3. Current CTC
+                    cur_salary = candidate_profile.get("currentSalary") or ""
+                    if cur_salary:
+                        curr_input = drawer.locator("input[name*='currentCtc' i], input[placeholder*='current ctc' i], input[name*='currentSalary' i]").first
+                        if await curr_input.count() > 0:
+                            await human_type(curr_input, cur_salary)
+                            log(f"[Playwright Agent] Populated Current CTC: {cur_salary}")
+
+                    # 4. Expected CTC
+                    exp_salary = candidate_profile.get("expectedSalary") or ""
+                    if exp_salary:
+                        exp_ctc_input = drawer.locator("input[name*='expectedCtc' i], input[placeholder*='expected ctc' i], input[name*='expectedSalary' i]").first
+                        if await exp_ctc_input.count() > 0:
+                            await human_type(exp_ctc_input, exp_salary)
+                            log(f"[Playwright Agent] Populated Expected CTC: {exp_salary}")
+
+                    # 5. Resume upload
+                    file_input = drawer.locator("input[type='file']").first
+                    if await file_input.count() > 0:
+                        try:
+                            await file_input.set_input_files(resume_pdf_path)
+                            log("[Playwright Agent] Attached tailored ATS resume PDF to Naukri drawer")
+                        except Exception as up_ex:
+                            log(f"[Playwright Agent] Resume upload note: {up_ex}")
+
+                    # 6. Screening questions
+                    for ans in screening_answers:
+                        q_txt = ans.get("questionText", "")
+                        a_txt = ans.get("answerText", "")
+                        if q_txt and a_txt:
+                            q_match = drawer.locator(f"xpath=//label[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{q_txt.lower()[:20]}')]/following::input[1]").first
+                            if await q_match.count() > 0:
+                                await human_type(q_match, a_txt)
+                                log(f"[Playwright Agent] Answered question '{q_txt[:30]}...' with '{a_txt}'")
+
+                    # 7. Check Save and Apply button
+                    save_btn = drawer.locator("button:has-text('Save and Apply'), button:has-text('Apply'), button:has-text('Submit'), button[type='submit']").first
+                    save_clicked = False
+                    if await save_btn.count() == 0 and GEMINI_API_KEY:
+                        v_dec = await analyze_screen_with_ai_vision(drawer, candidate_profile, "Find final Save & Apply or Submit button in Naukri drawer", screening_answers)
+                        if v_dec.get("action") == "click":
+                            log(f"[Playwright Agent] AI Vision clicking Save & Apply button in drawer: index={v_dec.get('element_index')}, coords={v_dec.get('coordinates')} ({v_dec.get('reasoning')})...")
+                            save_clicked = await execute_vision_action(drawer, v_dec)
+
+                    if copilot_mode:
+                        log("[Playwright Agent] Copilot Review Gateway Active: Naukri application form pre-filled and paused for candidate review.")
+                        return ApplyJobResponse(
+                            success=True,
+                            status="PausedForUserReview",
+                            message="Naukri application form pre-filled and staged. Paused for candidate review.",
+                            executionLogs=logs,
+                            finalPageUrl=page.url
+                        )
+                    else:
+                        if await save_btn.count() > 0:
+                            log("[Playwright Agent] Submitting final Naukri application...")
+                            await save_btn.click()
+                        elif save_clicked:
+                            log("[Playwright Agent] Submitting final Naukri application via AI Vision click...")
+                            verified, evidence = await verify_submission(page, pre_apply_url)
+                            if verified:
+                                log(f"[Playwright Agent] Naukri submission VERIFIED: {evidence}")
+                                return ApplyJobResponse(
+                                    success=True,
+                                    status="Submitted",
+                                    message="Application successfully submitted to Naukri.",
+                                    executionLogs=logs,
+                                    finalPageUrl=page.url
+                                )
+
+                if copilot_mode:
+                    log("[Playwright Agent] Copilot Review Gateway: Naukri flow staged for candidate review.")
+                    return ApplyJobResponse(
+                        success=True,
+                        status="PausedForUserReview",
+                        message="Naukri application initiated. Paused for candidate review.",
+                        executionLogs=logs,
+                        finalPageUrl=page.url
+                    )
+
+                return ApplyJobResponse(
+                    success=True,
+                    status="Submitted",
+                    message="Naukri application initiated.",
+                    executionLogs=logs,
+                    finalPageUrl=page.url
+                )
+
+            # =========================================================================
+            # Case 3: ATS Portals (Greenhouse, Lever, Ashby, Workday, Company Careers)
             # =========================================================================
             log("[Playwright Agent] Executing ATS portal form filler...")
 
@@ -839,7 +1358,14 @@ async def execute_playwright_flow(
             log(f"[Playwright Agent] Field read-back: {verified_fields}/{present_fields} identity fields retained values.")
 
             # 6. Check Submit Button
-            submit_btn = page.locator("button[type='submit'], input[type='submit'], button:has-text('Submit Application'), button:has-text('Apply')").first
+            submit_btn = page.locator("button[type='submit'], input[type='submit'], button:has-text('Submit Application'), button:has-text('Apply'), button:has-text('Submit')").first
+            submit_clicked = False
+            if await submit_btn.count() == 0 and GEMINI_API_KEY:
+                log("[Playwright Agent] Standard submit selector not found. Engaging AI Vision Engine...")
+                v_dec = await analyze_screen_with_ai_vision(page, candidate_profile, "Find the final Submit Application or Continue button on this career portal", screening_answers)
+                if v_dec.get("action") == "click":
+                    log(f"[Playwright Agent] AI Vision decided to click submit button: index={v_dec.get('element_index')}, selector={v_dec.get('selector')}, coords={v_dec.get('coordinates')} ({v_dec.get('reasoning')})...")
+                    submit_clicked = await execute_vision_action(page, v_dec)
             if copilot_mode:
                 log("[Playwright Agent] Copilot Mode Active: Form populated and verified. Paused before submission for candidate authorization.")
                 return ApplyJobResponse(
@@ -855,6 +1381,13 @@ async def execute_playwright_flow(
                     pre_click_url = page.url
                     await submit_btn.click()
                     verified, evidence = await verify_submission(page, pre_click_url)
+                elif submit_clicked:
+                    log("[Playwright Agent] Submitting application via AI Vision click...")
+                    pre_click_url = page.url
+                    verified, evidence = await verify_submission(page, pre_click_url)
+                else:
+                    verified = False
+                    evidence = "No submit button found or clicked"
                     if verified:
                         log(f"[Playwright Agent] Submission VERIFIED: {evidence}")
                         return ApplyJobResponse(

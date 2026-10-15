@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using ResumeTailor.Application.Common.Interfaces;
 using ResumeTailor.Infrastructure.Ai;
 using ResumeTailor.Infrastructure.Aksh;
+using ResumeTailor.Infrastructure.Aksh.Skills;
 using ResumeTailor.Infrastructure.AtsEngine;
 using ResumeTailor.Infrastructure.Billing;
 using ResumeTailor.Infrastructure.Export;
@@ -117,6 +118,7 @@ public static class DependencyInjection
         // tool can ever accept a model-supplied userId (deleted legacy shape).
         services.AddSingleton<AkshChatClientAdapter>();
         services.AddTransient<GeminiFunctionCallingClient>();
+        services.AddSingleton<IAkshSkillRegistry, AkshSkillRegistry>();
         services.AddScoped<ITokenLedger, TokenLedger>();
         services.AddScoped<IPacingGovernor, AkshPacingGovernor>();
         services.AddScoped<IAkshAgentRunner, AkshAgentRunner>();

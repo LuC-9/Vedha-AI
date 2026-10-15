@@ -363,6 +363,30 @@
     element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
   }
 
+  // React/Vue/Angular controlled checkbox & radio native state setter
+  function setNativeChecked(element, isChecked) {
+    if (!element) return;
+    const boolVal = Boolean(isChecked);
+    const prototype = window.HTMLInputElement?.prototype;
+    const descriptor = prototype ? Object.getOwnPropertyDescriptor(prototype, "checked") : null;
+    const tracker = element._valueTracker;
+    if (tracker && typeof tracker.setValue === "function") {
+      tracker.setValue(!boolVal ? "true" : "false");
+    }
+    if (descriptor && descriptor.set) {
+      descriptor.set.call(element, boolVal);
+    } else {
+      element.checked = boolVal;
+    }
+    try {
+      element.click();
+    } catch (_) {}
+    try {
+      element.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    } catch (_) {}
+    element.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+  }
+
   // Enhanced dropdown/select handler for React/Vue/Angular controlled components
   async function selectDropdownOption(selectEl, optionValueOrText) {
     if (!selectEl || optionValueOrText === undefined || optionValueOrText === null) return false;
@@ -477,19 +501,39 @@
       title =
         document
           .querySelector(
-            ".top-card-layout__title, h1.topcard__title, .job-details-jobs-unified-top-card__job-title",
+            ".top-card-layout__title, h1.topcard__title, .job-details-jobs-unified-top-card__job-title, .jobs-unified-top-card__job-title, h1.t-24, h2.jobs-details-top-card__job-title, .job-details-jobs-unified-top-card__job-title-link",
           )
           ?.innerText?.trim() || "";
       company =
         document
           .querySelector(
-            ".topcard__flavor, .topcard__flavor--black-link, .job-details-jobs-unified-top-card__company-name",
+            ".topcard__flavor, .topcard__flavor--black-link, .job-details-jobs-unified-top-card__company-name, .jobs-unified-top-card__company-name, .job-details-jobs-unified-top-card__primary-description-container a, .jobs-unified-top-card__subtitle-primary-grouping a",
           )
           ?.innerText?.trim() || "";
       description =
         document
           .querySelector(
-            ".show-more-less-html__markup, .description__text, .jobs-description__content",
+            "#job-details, .jobs-description-content__text, .show-more-less-html__markup, .description__text, .jobs-description__content, article.jobs-description__container, .jobs-box__html-content",
+          )
+          ?.innerText?.trim() || "";
+    } else if (host.includes("workday.com") || host.includes("myworkdayjobs.com")) {
+      source = "Workday";
+      title =
+        document
+          .querySelector(
+            "[data-automation-id='jobPostingHeader'], h2[data-automation-id='jobPostingHeader'], h1.css-1r2q6j9, h1",
+          )
+          ?.innerText?.trim() || "";
+      company =
+        document
+          .querySelector(
+            "[data-automation-id='jobPostingCompanyName'], [data-automation-id='companyName'], [data-automation-id='subHeader']",
+          )
+          ?.innerText?.trim() || "";
+      description =
+        document
+          .querySelector(
+            "[data-automation-id='jobPostingDescription'], [data-automation-id='job-posting-details'], .css-1ez5m06",
           )
           ?.innerText?.trim() || "";
     } else if (host.includes("naukri.com")) {
@@ -561,11 +605,21 @@
       description =
         document.querySelector("#jobDescriptionText")?.innerText?.trim() || "";
     } else {
-      title = document.querySelector("h1")?.innerText?.trim() || document.title;
+      title =
+        document.querySelector("meta[property='og:title']")?.getAttribute("content")?.trim() ||
+        document.querySelector("h1")?.innerText?.trim() ||
+        document.title;
+      company =
+        document.querySelector("meta[property='og:site_name']")?.getAttribute("content")?.trim() ||
+        document.querySelector("[itemprop='hiringOrganization']")?.innerText?.trim() ||
+        "Company";
       description =
         document
           .querySelector("main, article, #job-description, .job-description")
-          ?.innerText?.trim() || document.body.innerText;
+          ?.innerText?.trim() ||
+        document.querySelector("meta[name='description']")?.getAttribute("content")?.trim() ||
+        document.body?.innerText ||
+        "";
     }
 
     return {
@@ -1962,10 +2016,7 @@ Return JSON array in format:
         );
         if (!matched) return false;
         await simulatePointerInteraction(matched);
-        matched.click();
-        matched.checked = true;
-        matched.dispatchEvent(new Event("input", { bubbles: true }));
-        matched.dispatchEvent(new Event("change", { bubbles: true }));
+        setNativeChecked(matched, true);
         markFilled(question.element || matched);
         await sleep(randomBetween(40, 90));
         return true;
@@ -2041,12 +2092,22 @@ Return JSON array in format:
       unansweredElements.push(cb);
     }
 
+    // Check for unattached file upload inputs (resume / cover letter uploads)
+    const fileInputs = Array.from(container.querySelectorAll("input[type='file']")).filter(isFieldActionable);
+    for (const fi of fileInputs) {
+      if (fi.files && fi.files.length > 0) continue;
+      markPleaseReview(fi);
+      escalateFillField(fi, "Please attach your resume file here");
+      unansweredElements.push(fi);
+    }
+
     const resumeCards = Array.from(container.querySelectorAll(
       ".jobs-document-upload-redesign-card__container, div[data-test-document-upload], input[type='radio'][id*='resume'], button[aria-label*='Choose resume']"
     ));
     if (resumeCards.length > 0) {
       const firstResume = resumeCards[0];
       if (firstResume.tagName === "INPUT" && !firstResume.checked) {
+        setNativeChecked(firstResume, true);
         await simulatePointerInteraction(firstResume);
         firstResume.click();
         firstResume.dispatchEvent(new Event("change", { bubbles: true }));
@@ -2784,8 +2845,7 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
             continue;
           }
           if (targetRadio) {
-            targetRadio.click();
-            targetRadio.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+            setNativeChecked(targetRadio, true);
             if (radioGroup) radioGroup.style.outline = "2px solid #10b981";
             remediatedCount++;
             continue;
@@ -2897,8 +2957,7 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
             }
 
             if (targetRadio) {
-              targetRadio.click();
-              targetRadio.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+              setNativeChecked(targetRadio, true);
               el.style.outline = "2px solid #10b981";
               remediatedCount++;
               continue;
@@ -3661,17 +3720,88 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
         }
 
         // DOM Step Fingerprint Verification: confirm actual step transition occurred.
-        // If fingerprint unchanged after 2.5s, "Next" click was rejected silently by the portal.
-        // Do NOT increment stepIndex in that case to prevent false progression reporting.
-        const fingerprintAfter = captureStepFingerprint(container);
+        // If fingerprint unchanged after initial wait, allow settling or perform active recovery.
+        let fingerprintAfter = captureStepFingerprint(container);
+        if (fingerprintAfter === fingerprintBefore) {
+          // 1. Slow transition grace period: wait an additional 1000ms and re-check
+          await pacerSleep(1000, 1500);
+          fingerprintAfter = captureStepFingerprint(container);
+        }
+
         if (fingerprintAfter !== fingerprintBefore) {
           // Step genuinely advanced — increment counter
           stepIndex++;
         } else {
-          // Fingerprint unchanged: portal rejected or no DOM change detected.
-          // Log warning and do NOT increment stepIndex to avoid false-positive reporting.
-          console.warn(`[Vedha AI] Step fingerprint unchanged after Next click on step ${stepIndex}. Portal may have rejected navigation or no new inputs loaded.`);
-          // Still increment to avoid hard infinite loop, but apply a longer back-off
+          // Fingerprint unchanged: portal rejected navigation or an unfilled required control blocked the step.
+          console.warn(`[Vedha AI] Step fingerprint unchanged after Next click on step ${stepIndex}. Diagnosing step blockers...`);
+
+          // A: Scan for unselected radio groups or unfilled required inputs
+          const unselectedRadios = Array.from(container.querySelectorAll("fieldset, [role='radiogroup']")).filter(fs => {
+            if (!isElementVisible(fs)) return false;
+            return fs.querySelectorAll("input[type='radio']:checked").length === 0;
+          });
+
+          const unfilledRequired = Array.from(container.querySelectorAll("input:not([type='hidden']), textarea, select")).filter(inp => {
+            if (!isElementVisible(inp)) return false;
+            if (inp.type === "checkbox" || inp.type === "radio") return false;
+            const val = (inp.value || "").trim();
+            return !val && (inp.required || inp.getAttribute("aria-required") === "true" || inp.getAttribute("aria-invalid") === "true");
+          });
+
+          const activeErrors = findActiveValidationErrors(container);
+
+          if (unselectedRadios.length > 0 || unfilledRequired.length > 0 || activeErrors.length > 0) {
+            console.log(`[Vedha AI] Step ${stepIndex} stalled on required fields (${unselectedRadios.length} radios, ${unfilledRequired.length} required inputs, ${activeErrors.length} errors). Running remediation...`);
+            const healed = await remediateValidationErrors(container, safePayload);
+            totalFieldsFilled += healed;
+            await sleep(500);
+
+            // If healed, retry clicking Next
+            if (healed > 0) {
+              const retryProg = findFormProgressionButton(container) || (container === document.body ? null : findFormProgressionButton(document.body));
+              if (retryProg && retryProg.type === "next") {
+                console.log("[Vedha AI] Re-clicking Next after self-healing stalled step...");
+                await clickElementNaturally(retryProg.element);
+                await pacerSleep(1500, 2200);
+                fingerprintAfter = captureStepFingerprint(container);
+                if (fingerprintAfter !== fingerprintBefore) {
+                  stepIndex++;
+                  continue;
+                }
+              }
+            }
+
+            // Still blocked: escalate the offending control to candidate
+            const blocker = unselectedRadios[0] || unfilledRequired[0] || (activeErrors[0]?.inputElement);
+            if (blocker) {
+              blocker.scrollIntoView({ behavior: "smooth", block: "center" });
+              blocker.style.outline = "2px solid #f59e0b";
+              blocker.style.boxShadow = "0 0 10px rgba(245, 158, 11, 0.5)";
+            }
+            vedhaRun.transition("ESCALATED");
+            return {
+              success: false,
+              pausedForReview: true,
+              filledCount: totalFieldsFilled,
+              error: `Paused on step ${stepIndex}: A required field needs your input before continuing. Please check the highlighted field and click Next.`
+            };
+          }
+
+          // B: Attempt direct native click fallback if synthetic pointer events were absorbed by portal
+          const retryBtn = findFormProgressionButton(container);
+          if (retryBtn && retryBtn.element) {
+            console.log("[Vedha AI] Attempting secondary native click on Next button...");
+            retryBtn.element.click();
+            await pacerSleep(1500, 2200);
+            fingerprintAfter = captureStepFingerprint(container);
+            if (fingerprintAfter !== fingerprintBefore) {
+              stepIndex++;
+              continue;
+            }
+          }
+
+          // C: Hard stall without visible error: gracefully advance stepIndex with back-off to prevent infinite loop
+          console.warn(`[Vedha AI] Step fingerprint persistently unchanged on step ${stepIndex}. Advancing step index with back-off.`);
           await pacerSleep(1200, 2000);
           stepIndex++;
         }
@@ -4144,9 +4274,42 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
 
     function resolveCandidatePayload(stored, job, options = {}) {
       const rawProfile = stored?.candidateProfile || {};
+      const resumePersonal = stored?.cachedMasterResume?.schema?.personalInfo || {};
+      const cachedUser = stored?.cachedUser || {};
+
+      const fullName = rawProfile.fullName || resumePersonal.fullName || cachedUser.fullName || "";
+      let firstName = rawProfile.firstName;
+      let lastName = rawProfile.lastName;
+      if (!firstName && fullName) {
+        firstName = String(fullName).split(" ")[0] || "";
+      }
+      if (!lastName && fullName) {
+        lastName = String(fullName).split(" ").slice(1).join(" ") || "";
+      }
+
+      const email = rawProfile.email || resumePersonal.email || cachedUser.email || "";
+      const phone = rawProfile.phoneNumber || resumePersonal.phone || "";
+      const currentCity = rawProfile.currentCity || resumePersonal.location || "";
+      const linkedInUrl = rawProfile.linkedInUrl || resumePersonal.linkedInUrl || "";
+      const githubUrl = rawProfile.githubUrl || resumePersonal.gitHubUrl || "";
+      const portfolioUrl = rawProfile.portfolioUrl || resumePersonal.portfolioUrl || "";
+      const skills = (rawProfile.skills && rawProfile.skills.length > 0)
+        ? rawProfile.skills
+        : (stored?.cachedMasterResume?.schema?.skills || []);
+
       const profile = {
         ...DEFAULT_CANDIDATE_PROFILE,
-        ...rawProfile
+        ...rawProfile,
+        fullName: fullName || rawProfile.fullName || "",
+        firstName: firstName || rawProfile.firstName || "",
+        lastName: lastName || rawProfile.lastName || "",
+        email: email || rawProfile.email || "",
+        phoneNumber: phone || rawProfile.phoneNumber || "",
+        currentCity: currentCity || rawProfile.currentCity || "",
+        linkedInUrl: linkedInUrl || rawProfile.linkedInUrl || "",
+        githubUrl: githubUrl || rawProfile.githubUrl || "",
+        portfolioUrl: portfolioUrl || rawProfile.portfolioUrl || "",
+        skills: skills
       };
       for (const k of Object.keys(DEFAULT_CANDIDATE_PROFILE)) {
         if (!profile[k] || profile[k] === "") {
@@ -4198,7 +4361,7 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
     dock.querySelector("#vedha-dock-autoadvance")?.addEventListener("click", async () => {
       setDockStatus("⚡ Running Autonomous Multi-Step Fill...");
       try {
-        chrome.storage.local.get(["vedha_token", "jwtToken", "token", "candidateProfile", "cachedMasterResume", "vedha_review_gateway"], async (stored) => {
+        chrome.storage.local.get(["vedha_token", "jwtToken", "token", "candidateProfile", "cachedMasterResume", "cachedUser", "vedha_review_gateway"], async (stored) => {
           const payload = resolveCandidatePayload(stored, job, {
             copilotMode: stored?.vedha_review_gateway !== false
           });
@@ -4217,7 +4380,7 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
     dock.querySelector("#vedha-dock-easyapply")?.addEventListener("click", async () => {
       setDockStatus("⚡ Running Easy Apply with Review Gateway...");
       try {
-        chrome.storage.local.get(["vedha_token", "jwtToken", "token", "candidateProfile", "cachedMasterResume"], async (stored) => {
+        chrome.storage.local.get(["vedha_token", "jwtToken", "token", "candidateProfile", "cachedMasterResume", "cachedUser"], async (stored) => {
           const payload = resolveCandidatePayload(stored, job, { copilotMode: true });
           const res = await autoApplyLinkedInEasyApply(payload);
           if (res.success) {
@@ -4234,7 +4397,7 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
     dock.querySelector("#vedha-dock-safefill")?.addEventListener("click", async () => {
       setDockStatus("⚡ Filling form fields with biometric jitter & Gemini AI...");
       try {
-        chrome.storage.local.get(["vedha_token", "jwtToken", "token", "candidateProfile", "cachedMasterResume"], async (stored) => {
+        chrome.storage.local.get(["vedha_token", "jwtToken", "token", "candidateProfile", "cachedMasterResume", "cachedUser"], async (stored) => {
           const payload = resolveCandidatePayload(stored, job, { copilotMode: true, isSafeFill: true });
           const res = await autoFillForm(payload);
           if (res.success) {
@@ -4251,10 +4414,14 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
     dock.querySelector("#vedha-dock-ats")?.addEventListener("click", async () => {
       setDockStatus("🎯 Calculating ATS fit against Master Resume...");
       try {
-        chrome.storage.local.get(["vedha_token", "jwtToken", "token"], async (stored) => {
+        chrome.storage.local.get(["vedha_token", "jwtToken", "token", "cachedMasterResume"], async (stored) => {
           const token = stored.vedha_token || stored.jwtToken || stored.token;
           if (!token) {
-            setDockStatus("Predicted ATS Match: 88% (Sign in for detailed match)");
+            setDockStatus("⚠️ Sign in to Vedha AI to calculate live ATS match");
+            return;
+          }
+          if (!stored.cachedMasterResume) {
+            setDockStatus("⚠️ Upload a Master Resume in Vedha Studio to analyze match");
             return;
           }
           const res = await fetch("http://localhost:5000/api/orchestrator/quick-match", {
@@ -4271,13 +4438,14 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
           });
           if (res.ok) {
             const data = await res.json();
-            setDockStatus(`🎯 ATS Match: ${data.overallScore || 85}% — ${data.recommendation || "High fit"}`, true);
+            setDockStatus(`🎯 ATS Match: ${data.overallScore || 85}% — ${data.recommendation || "Calculated"}`, true);
           } else {
-            setDockStatus("Predicted ATS Match: 88% (C#, .NET, Postgres match)");
+            const err = await res.json().catch(() => ({}));
+            setDockStatus(`⚠️ ${err.error || "Failed to calculate ATS match."}`);
           }
         });
       } catch (err) {
-        setDockStatus("Predicted ATS Match: 88% (C#, .NET, Postgres match)");
+        setDockStatus("⚠️ Unable to connect to Vedha AI backend.");
       }
     });
 
@@ -4451,18 +4619,19 @@ Provide ONLY a single, corrected, compliant value that satisfies the validation 
         }
       });
 
-      // 4. Unpinned copilot drops below dialogs and collapses to the pill.
-      //    Pin is an explicit override: the card stays expanded at the top layer.
+      // 4. Coordinate dock elevation above modals.
+      //    The root stays elevated (DOCK_Z_FOREGROUND) so user controls (pill or expanded dock)
+      //    remain interactive above modal backdrops.
+      //    When pinned, the dock stays expanded; when unpinned, it collapses to the pill.
       const isUserPinned = readDockPinned();
+      placeDockRoot(dockRoot, DOCK_Z_FOREGROUND);
       if (isUserPinned) {
         dockExpandedBeforeModal = null;
-        placeDockRoot(dockRoot, DOCK_Z_FOREGROUND);
         presentDock(dockCard, dockPill, true);
       } else {
         if (dockExpandedBeforeModal === null) {
           dockExpandedBeforeModal = dockCardIsExpanded(dockCard);
         }
-        placeDockRoot(dockRoot, DOCK_Z_BELOW_DIALOGS);
         presentDock(dockCard, dockPill, false);
       }
     } else {

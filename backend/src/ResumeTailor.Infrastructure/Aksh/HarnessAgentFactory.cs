@@ -29,12 +29,35 @@ public static class HarnessAgentFactory
 
     /// <summary>
     /// Per-turn agent over a caller-supplied chat client — used to bind the
-    /// candidate's own provider, stored API key, and model for the turn.
+    /// candidate's own provider, stored API key, model, and skill-specific tools for the turn.
+    /// When allowedToolNames is empty, no tools are bound, allowing pure conversational chat.
     /// </summary>
-    public static AIAgent CreateTurnAgent(IServiceProvider services, Guid userId, Guid sessionId, IChatClient chatClient)
+    public static AIAgent CreateTurnAgent(
+        IServiceProvider services, 
+        Guid userId, 
+        Guid sessionId, 
+        IChatClient chatClient, 
+        IReadOnlyList<string>? allowedToolNames = null)
     {
         var scopes = services.GetRequiredService<IServiceScopeFactory>();
-        return Build(chatClient, services, AkshTools.CreateCatalog(scopes, userId, sessionId));
+        var fullCatalog = AkshTools.CreateCatalog(scopes, userId, sessionId);
+
+        IReadOnlyList<AIFunction> filteredTools;
+        if (allowedToolNames == null)
+        {
+            filteredTools = fullCatalog;
+        }
+        else if (allowedToolNames.Count == 0)
+        {
+            filteredTools = Array.Empty<AIFunction>();
+        }
+        else
+        {
+            var allowedSet = new HashSet<string>(allowedToolNames, StringComparer.OrdinalIgnoreCase);
+            filteredTools = fullCatalog.Where(t => allowedSet.Contains(t.Name)).ToList();
+        }
+
+        return Build(chatClient, services, filteredTools);
     }
 
     private static AIAgent Build(IChatClient chatClient, IServiceProvider services, IReadOnlyList<AIFunction> tools)
@@ -56,7 +79,7 @@ public static class HarnessAgentFactory
                 ChatOptions = new ChatOptions
                 {
                     Instructions = AkshPrompts.Core,
-                    Tools = [.. tools],
+                    Tools = tools.Count > 0 ? [.. tools] : null,
                     Temperature = 0.2f,
                     // MEAI-level cap (not the experimental harness option): tool-heavy
                     // turns must not truncate mid-chain. Provider-side AI_MAX_TOKENS still applies.

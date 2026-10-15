@@ -20,18 +20,34 @@ Eliminate simulated C# pipeline logs. Equip the system with:
 - `workers/playwright-agent/requirements.txt`: Add `fastapi`, `uvicorn`.
 - `workers/playwright-agent/main.py`:
   - Add FastAPI HTTP app alongside NATS JetStream listener.
-  - Implement `apply_job` endpoint supporting LinkedIn Easy Apply (with `li_at` cookie) and ATS portals (Greenhouse, Lever, Ashby, Workday).
+  - Implement `apply_job` endpoint supporting LinkedIn Easy Apply (with `li_at` cookie), Naukri (`naukri.com` apply button, drawer/chatbot, CTC/notice/experience injection), and ATS portals (Greenhouse, Lever, Ashby, Workday).
+  - Implement `analyze_screen_with_ai_vision(page, candidate_profile, intent_description, candidate_answers)` using Gemini Vision API (`gemini-2.5-flash` / `gemini-2.0-flash` / `gemini-1.5-flash`) with screenshot capture and interactive DOM tree analysis.
   - Implement `scrape_job` endpoint for dynamic SPA job descriptions.
   - Add genuine submission confirmation check and truthful error reporting.
 
 ### C. C# Backend
+- `backend/src/ResumeTailor.Infrastructure/Aksh/GeminiFunctionCallingClient.cs`:
+  - Implement ordered model fallback sequence: `gemini-2.5-flash` -> `gemini-2.0-flash` -> `gemini-1.5-flash` -> `gemini-flash-lite-latest`.
+  - On 404 or unsupported model response, cascade down the sequence automatically.
+  - Default model resolution to `gemini-2.5-flash` when unspecified.
+- `backend/src/ResumeTailor.Infrastructure/Ai/AiProviders.cs`:
+  - Synchronize Gemini model fallback and resolution.
 - `backend/src/ResumeTailor.Infrastructure/Orchestrator/JobApplicationProviders.cs`:
-  - Update `LinkedInCopilotProvider` to check for Playwright Agent availability or provide explicit instructions to use the Extension Copilot; never pretend it was submitted without live confirmation.
-  - Update `GreenhouseProvider`, `LeverProvider`, `AshbyProvider`, `WorkdayProvider`, and `GenericBrowserProvider` to dispatch HTTP requests to the Playwright Worker service (`http://vedha-worker:8000/api/playwright/apply` or `http://localhost:8000/api/playwright/apply`), stream real browser step logs, and return authentic results.
+  - Update `LinkedInCopilotProvider` and `NaukriProvider` to pass `copilotReviewMode` directly to `_workerClient.TryApplyAsync`, allowing real Playwright execution to stage the form in a browser and pause at Review screen.
+  - If Playwright is offline or unreachable, fall back gracefully to staged state and extension guidance.
+  - Update `GreenhouseProvider`, `LeverProvider`, `AshbyProvider`, `WorkdayProvider`, and `GenericBrowserProvider` to dispatch with `copilotReviewMode`.
 - `backend/src/ResumeTailor.Infrastructure/Orchestrator/JobApplicationOrchestrator.cs`:
   - Ensure status only transitions to `Submitted` when verified by the browser engine.
 
-### D. Frontend
+### D. Infrastructure & Environments
+- `infra/docker-compose.yml`:
+  - Pass `GEMINI_API_KEY` and `GEMINI_MODEL` to `vedha-worker`.
+- `infra/.env.example`:
+  - Add `GEMINI_MODEL=gemini-2.5-flash`.
+- `infra/build_and_start.ps1`:
+  - Pass `-e GEMINI_API_KEY` and `-e GEMINI_MODEL` to `vedha-worker`.
+
+### E. Frontend
 - `frontend/src/pages/OrchestratorQueuePage.tsx`:
   - Add "Open Job & Apply via Extension Copilot" button with direct URL link for LinkedIn postings.
   - Clarify the status of items paused at Review Gateway with clear action items.
@@ -39,16 +55,20 @@ Eliminate simulated C# pipeline logs. Equip the system with:
 ---
 
 ## 3. Verification & Testing Strategy
-1. **Unit Tests**: Ensure all existing backend unit tests pass (`dotnet test`).
+1. **Unit Tests**: Ensure all existing backend unit tests pass (`dotnet test backend/ResumeTailor.sln -nodereuse:false -m:1`).
 2. **Backend Build**: Verify `dotnet build` succeeds with zero errors.
 3. **Frontend Build**: Verify `npm run build` succeeds with zero errors.
-4. **Container Rebuild & Health**: Verify backend, frontend, and worker containers run cleanly.
+4. **Extension E2E Tests**: Verify all 148 E2E extension tests pass (`node tests/e2e/runner.js`).
 5. **Live Verification**:
-   - Verify Extension scripts syntax and popup interface.
    - Verify Playwright worker API responds to `/health` and accepts `/api/playwright/apply`.
-   - Verify LinkedIn Easy Apply detects when authentication is missing and does not falsely claim submission.
+   - Verify Gemini function calling client correctly cascades through fallback models on 404.
+   - Verify LinkedIn and Naukri copilot flows invoke the browser agent properly.
 
 ---
 
 ## 4. Changelog
+- **2026-10-15 (Extension Fingerprint Recovery)**: Added active step blocker diagnosis, 1000ms transition grace period, missing radio/required field remediation, visual amber glow highlight on blocking fields, and secondary native click fallback in `extension/content.js` to resolve `Step fingerprint unchanged after Next click` stalling.
+- **2026-10-15 (Naukri Bot-Manager Stealth & AI Vision Blocker Handling)**: Added `STEALTH_HEADERS`, `navigator.webdriver` removal, `window.chrome` mocking, post-navigation WAF detection, and explicit `action == "cannot_proceed"` blocker handling with extension guidance in `workers/playwright-agent/main.py`.
+- **2026-10-15**: Added Multimodal AI Vision Decision Engine to Playwright worker, dedicated Naukri (`naukri.com`) application drawer and chatbot automation flow, C# Orchestrator live copilot dispatch to worker, and Gemini model fallback cascade (`gemini-2.5-flash` -> `gemini-2.0-flash` -> `gemini-1.5-flash` -> `gemini-flash-lite-latest`) in `GeminiFunctionCallingClient.cs`.
 - **2026-10-04**: Created plan for real browser automation and desktop extension copilot.
+

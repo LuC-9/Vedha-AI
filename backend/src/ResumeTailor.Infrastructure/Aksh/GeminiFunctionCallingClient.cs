@@ -88,17 +88,48 @@ public class GeminiFunctionCallingClient
                         role = "model";
                         // Echo API-issued ids only (see parse site): synthetic
                         // local_* ids are never sent — the key is omitted, not null.
+                        string? tsStr = null;
+                        var cleanArgs = new Dictionary<string, object?>();
+                        if (call.Arguments != null)
+                        {
+                            foreach (var kvp in call.Arguments)
+                            {
+                                if (string.Equals(kvp.Key, "thoughtSignature", StringComparison.OrdinalIgnoreCase)
+                                    || string.Equals(kvp.Key, "thought_signature", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    if (kvp.Value is string s && !string.IsNullOrWhiteSpace(s))
+                                    {
+                                        tsStr = s;
+                                    }
+                                }
+                                else
+                                {
+                                    cleanArgs[kvp.Key] = kvp.Value;
+                                }
+                            }
+                        }
+
                         var callDict = new Dictionary<string, object?>
                         {
                             ["name"] = call.Name,
-                            ["args"] = ToJsonNode(call.Arguments),
+                            ["args"] = ToJsonNode(cleanArgs),
                         };
                         if (!string.IsNullOrWhiteSpace(call.CallId)
                             && !call.CallId.StartsWith("local_", StringComparison.Ordinal))
                         {
                             callDict["id"] = call.CallId;
                         }
-                        parts.Add(new { functionCall = callDict });
+
+                        // Gemini 2.5 / 3.x requires thoughtSignature on the part containing functionCall (sibling, not inside functionCall)
+                        var partDict = new Dictionary<string, object?>
+                        {
+                            ["functionCall"] = callDict,
+                        };
+                        if (!string.IsNullOrEmpty(tsStr))
+                        {
+                            partDict["thoughtSignature"] = tsStr;
+                        }
+                        parts.Add(partDict);
                         break;
                     case FunctionResultContent result:
                         role = "user";
@@ -188,16 +219,25 @@ public class GeminiFunctionCallingClient
                     response = await httpClient.SendAsync(request, cancellationToken);
                     responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
 
-                    if (response.StatusCode == HttpStatusCode.NotFound && model != "gemini-flash-lite-latest")
+                    if (response.StatusCode == HttpStatusCode.NotFound ||
+                        (int)response.StatusCode == 429 ||
+                        (int)response.StatusCode >= 500 ||
+                        (response.StatusCode == HttpStatusCode.BadRequest && responseContent != null && responseContent.Contains("thought_signature", StringComparison.OrdinalIgnoreCase)))
                     {
-                        model = "gemini-flash-lite-latest";
-                        url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
-                        continue;
+                        var nextModel = GetNextFallbackModel(model);
+                        if (!string.IsNullOrEmpty(nextModel) && !string.Equals(nextModel, model, StringComparison.OrdinalIgnoreCase))
+                        {
+                            _logger.LogWarning("Gemini function-calling model '{CurrentModel}' returned {Status}. Cascading to fallback model '{NextModel}'.",
+                                model, response.StatusCode, nextModel);
+                            model = nextModel;
+                            url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={apiKey}";
+                            continue;
+                        }
                     }
 
                     if ((response.StatusCode == HttpStatusCode.ServiceUnavailable || (int)response.StatusCode == 429) && attempt < 2)
                     {
-                        await Task.Delay(attempt * 1500, cancellationToken);
+                        await Task.Delay(attempt * 1000, cancellationToken);
                         continue;
                     }
 
@@ -251,6 +291,21 @@ public class GeminiFunctionCallingClient
                             : $"Gemini blocked the prompt (safety filter: {blockReason}).");
                 }
 
+                // First pass: extract candidate-level or thought-part thoughtSignature
+                string? candidateThoughtSignature = null;
+                foreach (var p in parts)
+                {
+                    var sig = p?["thoughtSignature"]?.ToString()
+                        ?? p?["thought_signature"]?.ToString()
+                        ?? p?["functionCall"]?["thoughtSignature"]?.ToString()
+                        ?? p?["functionCall"]?["thought_signature"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(sig))
+                    {
+                        candidateThoughtSignature = sig;
+                        break;
+                    }
+                }
+
                 var contents_out = new List<AIContent>();
                 foreach (var part in parts)
                 {
@@ -268,45 +323,57 @@ public class GeminiFunctionCallingClient
                         continue;
                     }
 
-                var call = part?["functionCall"];
-                if (call != null)
-                {
-                    var name = call["name"]?.ToString() ?? string.Empty;
-                    if (string.IsNullOrWhiteSpace(name))
+                    var call = part?["functionCall"];
+                    if (call != null)
                     {
-                        continue;
-                    }
-
-                    // API-issued ids ride verbatim as our CallId so the matching
-                    // functionResponse echoes the exact id (Gemini 3 requirement).
-                    // Synthetic ids are prefixed and NEVER echoed: sending an id
-                    // the API never issued risks confusing strict models.
-                    var apiId = call["id"]?.ToString();
-                    var callId = !string.IsNullOrWhiteSpace(apiId)
-                        ? apiId!
-                        : $"local_{Guid.NewGuid():N}";
-
-                    var args = new Dictionary<string, object?>();
-                    if (call["args"] is JsonObject argsObj)
-                    {
-                        using var rawDoc = JsonDocument.Parse(argsObj.ToJsonString());
-                        foreach (var prop in rawDoc.RootElement.EnumerateObject())
+                        var name = call["name"]?.ToString() ?? string.Empty;
+                        if (string.IsNullOrWhiteSpace(name))
                         {
-                            args[prop.Name] = prop.Value.ValueKind switch
-                            {
-                                JsonValueKind.String => prop.Value.GetString(),
-                                JsonValueKind.Number when prop.Value.TryGetInt64(out var l) => l,
-                                JsonValueKind.Number => prop.Value.GetDouble(),
-                                JsonValueKind.True => true,
-                                JsonValueKind.False => false,
-                                JsonValueKind.Null => null,
-                                _ => prop.Value.Clone()
-                            };
+                            continue;
                         }
-                    }
 
-                    contents_out.Add(new FunctionCallContent(callId, name, args));
-                }
+                        // API-issued ids ride verbatim as our CallId so the matching
+                        // functionResponse echoes the exact id (Gemini 3 requirement).
+                        // Synthetic ids are prefixed and NEVER echoed: sending an id
+                        // the API never issued risks confusing strict models.
+                        var apiId = call["id"]?.ToString();
+                        var callId = !string.IsNullOrWhiteSpace(apiId)
+                            ? apiId!
+                            : $"local_{Guid.NewGuid():N}";
+
+                        var args = new Dictionary<string, object?>();
+                        if (call["args"] is JsonObject argsObj)
+                        {
+                            using var rawDoc = JsonDocument.Parse(argsObj.ToJsonString());
+                            foreach (var prop in rawDoc.RootElement.EnumerateObject())
+                            {
+                                args[prop.Name] = prop.Value.ValueKind switch
+                                {
+                                    JsonValueKind.String => prop.Value.GetString(),
+                                    JsonValueKind.Number when prop.Value.TryGetInt64(out var l) => l,
+                                    JsonValueKind.Number => prop.Value.GetDouble(),
+                                    JsonValueKind.True => true,
+                                    JsonValueKind.False => false,
+                                    JsonValueKind.Null => null,
+                                    _ => prop.Value.Clone()
+                                };
+                            }
+                        }
+
+                        // Gemini 2.5 / 3.x requires thought_signature in function call parts for multi-turn history
+                        var thoughtSignature = part?["thoughtSignature"]?.ToString()
+                            ?? part?["thought_signature"]?.ToString()
+                            ?? call["thoughtSignature"]?.ToString()
+                            ?? call["thought_signature"]?.ToString()
+                            ?? candidateThoughtSignature;
+
+                        if (!string.IsNullOrWhiteSpace(thoughtSignature))
+                        {
+                            args["thoughtSignature"] = thoughtSignature;
+                        }
+
+                        contents_out.Add(new FunctionCallContent(callId, name, args));
+                    }
                 }
 
                 if (contents_out.Count == 0)
@@ -589,18 +656,42 @@ public class GeminiFunctionCallingClient
     private static string Truncate(string value, int maxLength)
         => string.IsNullOrEmpty(value) || value.Length <= maxLength ? value ?? string.Empty : value[..maxLength];
 
+    private static readonly string[] ModelFallbackSequence =
+    [
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-1.5-flash",
+        "gemini-flash-lite-latest"
+    ];
+
+    private static string? GetNextFallbackModel(string currentModel)
+    {
+        var idx = Array.FindIndex(ModelFallbackSequence, m => string.Equals(m, currentModel, StringComparison.OrdinalIgnoreCase));
+        if (idx >= 0 && idx < ModelFallbackSequence.Length - 1)
+        {
+            return ModelFallbackSequence[idx + 1];
+        }
+
+        if (idx < 0)
+        {
+            // Current model was not in standard fallback sequence (e.g. gemini-3.8-flash or custom); cascade to frontier 2.5-flash
+            return ModelFallbackSequence[0];
+        }
+
+        return null; // Sequence exhausted
+    }
+
     /// <summary>
-    /// Harness model resolution (verified 2026-10-10 against vendor docs):
-    /// unset means gemini-3.8-flash (GA flagship Flash, agent-engineered).
-    /// 2.x is capacity-gated for new API users — never defaulted or mapped to.
-    /// Explicit lite aliases still resolve to lite (cost choice respected);
-    /// every other explicit name passes through untouched (never downgraded).
+    /// Harness model resolution:
+    /// Unset defaults to gemini-2.5-flash (Google's latest production flash model with excellent tool calling and vision).
+    /// Explicit lite aliases resolve to gemini-flash-lite-latest.
+    /// Explicit custom models pass through untouched.
     /// </summary>
     private static string ResolveModelName(string? modelName)
     {
-        if (string.IsNullOrWhiteSpace(modelName))
+        if (string.IsNullOrWhiteSpace(modelName) || modelName.Contains("3.8", StringComparison.OrdinalIgnoreCase))
         {
-            return "gemini-3.8-flash";
+            return "gemini-2.5-flash";
         }
 
         var clean = modelName.Trim();
@@ -617,3 +708,4 @@ public class GeminiFunctionCallingClient
         return clean;
     }
 }
+

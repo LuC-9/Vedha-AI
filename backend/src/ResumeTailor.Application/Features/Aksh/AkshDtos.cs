@@ -92,10 +92,14 @@ public static class AkshPlanner
 {
     public static List<AkshTodoItemDto> BuildInitialPlan(string goal, string? jobUrl)
     {
-        if (!string.IsNullOrWhiteSpace(jobUrl))
+        var goalLower = (goal ?? string.Empty).ToLowerInvariant();
+        var hasUrl = !string.IsNullOrWhiteSpace(jobUrl);
+
+        // Explicit Application Pipeline Intent:
+        var isApplyIntent = hasUrl && (goalLower.Contains("apply") || goalLower.Contains("submit") || goalLower.Contains("application") || goalLower.Contains("pipeline"));
+
+        if (isApplyIntent)
         {
-            // Tool names here must match AkshTools catalog entries exactly —
-            // MarkTodoDoneAsync syncs these states from real tool receipts.
             return new List<AkshTodoItemDto>
             {
                 new() { Step = "Scrape job posting", Tool = "scrape_job", Detail = jobUrl, State = "pending" },
@@ -105,10 +109,53 @@ public static class AkshPlanner
             };
         }
 
+        // Resume & ATS Optimization:
+        if (goalLower.Contains("resume") || goalLower.Contains("cv") || goalLower.Contains("bullet") || goalLower.Contains("ats"))
+        {
+            return new List<AkshTodoItemDto>
+            {
+                new() { Step = "Inspect Master Resume & Verified Experience", Tool = "get_master_resume", State = "pending" },
+                new() { Step = "Audit ATS Keywords & Google XYZ Bullet Formulas", Tool = null, State = "pending" },
+                new() { Step = "Draft Optimized Resume & Export ATS PDF", Tool = "prepare_package", State = "pending" },
+            };
+        }
+
+        // Mock Interview / Prep:
+        if (goalLower.Contains("interview") || goalLower.Contains("prep") || goalLower.Contains("star") || goalLower.Contains("mock"))
+        {
+            return new List<AkshTodoItemDto>
+            {
+                new() { Step = "Assess Target Role Context & Profile Experience", Tool = "get_candidate_profile", State = "pending" },
+                new() { Step = "Execute Behavioral STAR & Technical Drill", Tool = null, State = "pending" },
+                new() { Step = "Synthesize Performance Scorecard & Recommendations", Tool = null, State = "pending" },
+            };
+        }
+
+        // Salary Negotiation:
+        if (goalLower.Contains("salary") || goalLower.Contains("negotiat") || goalLower.Contains("offer") || goalLower.Contains("compensation"))
+        {
+            return new List<AkshTodoItemDto>
+            {
+                new() { Step = "Benchmark Target Role Compensation & Equity", Tool = "get_candidate_profile", State = "pending" },
+                new() { Step = "Draft Counter-Offer Talking Points & Email Script", Tool = null, State = "pending" },
+            };
+        }
+
+        // Profile & Application Queue Audit:
+        if (goalLower.Contains("queue") || goalLower.Contains("profile") || goalLower.Contains("audit") || goalLower.Contains("status"))
+        {
+            return new List<AkshTodoItemDto>
+            {
+                new() { Step = "Inspect Candidate Profile & Screening Memory", Tool = "get_candidate_profile", State = "pending" },
+                new() { Step = "Audit Application Queue & Recent Pipeline Runs", Tool = "get_application_queue", State = "pending" },
+            };
+        }
+
+        // General Career Strategist:
         return new List<AkshTodoItemDto>
         {
-            new() { Step = "Recall profile and memories", Tool = "recall_memory", Detail = goal, State = "pending" },
-            new() { Step = "Draft grounded answer", Tool = null, State = "pending" },
+            new() { Step = "Ground Career Context & Profile Data", Tool = "recall_memory", Detail = goal, State = "pending" },
+            new() { Step = "Synthesize Actionable Career Strategy", Tool = null, State = "pending" },
         };
     }
 }

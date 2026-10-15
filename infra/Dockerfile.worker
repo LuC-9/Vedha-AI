@@ -3,13 +3,16 @@ FROM mcr.microsoft.com/playwright/python:v1.49.0-jammy
 
 WORKDIR /app
 
-# Set non-interactive environment
+# Set non-interactive environment and resilient pip defaults
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+ENV PIP_DEFAULT_TIMEOUT=300
+ENV PIP_RETRIES=10
 
-# Copy requirements and install python packages
+# Copy requirements and install python packages with extended timeout and retry tolerance
 COPY workers/playwright-agent/requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir --default-timeout=300 --retries=10 -r requirements.txt
 
 # Install Playwright browser dependencies (ensure chromium is ready)
 RUN playwright install chromium

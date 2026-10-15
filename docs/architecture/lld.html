@@ -726,21 +726,23 @@ builder.Entity&lt;RefreshToken&gt;(b =>
     <section id="extension-internals">
       <h2 class="section-heading">8. Chrome Extension Manifest V3 Internals</h2>
       <p>
-        The extension operates across three decoupled contexts:
+        The extension operates across decoupled execution contexts with resilient event communication:
       </p>
       <div class="grid-2">
         <div class="card">
           <div class="card-title">Content Script Relay (content.js)</div>
           <p>
-            Injected into <code>http://localhost:3000/*</code> to listen for authentication postMessages, and into <code>https://*.linkedin.com/*</code> to inspect Easy Apply modals and auto-fill form inputs.
-            On LinkedIn it polls the details pane for 2.5 seconds, ignores messaging overlays without treating form messages as chat, and clicks Easy Apply with a pointer event sequence. An already-open Easy Apply dialog is used immediately.
-            Safe auto-fill calls <code>extractFormQuestions</code> so each control is paired with its own legend or label, then <code>resolveScreeningAnswer</code> before <code>POST /api/orchestrator/generate-answers</code>.
+            Injected into <code>http://localhost:3000/*</code> to listen for authentication postMessages, and into job portals (LinkedIn, Greenhouse, Lever, Ashby, Workday, Indeed, Naukri) to extract specifications and execute biometric form auto-filling.
+            Enhanced scraper heuristics support modern LinkedIn containers (<code>#job-details</code>, <code>.jobs-description-content__text</code>, <code>article.jobs-description__container</code>) and dedicated Workday selectors (<code>[data-automation-id='jobPostingHeader']</code>, <code>[data-automation-id='jobPostingDescription']</code>), with OpenGraph and JSON-LD fallbacks.
+            Safe auto-fill pairs questions with labels via <code>extractFormQuestions</code>, dispatches React synthetic events using descriptor prototype setters and <code>_valueTracker</code> resets, and retains z-index <code>2147483647</code> to float above modal dialogs.
           </p>
         </div>
         <div class="card">
-          <div class="card-title">Background Service Worker (background.js)</div>
+          <div class="card-title">Background & Popup Orchestrators (background.js & popup.js)</div>
           <p>
-            Manages <code>chrome.storage.local</code>, coordinates API requests to the ASP.NET Core backend with JWT bearer headers, and handles sidepanel opening events.
+            Coordinates <code>chrome.storage.local</code> state, manages <code>AUTH_STORAGE_KEYS</code> including <code>vedha_refresh_token</code>, and transparently refreshes expired access tokens via <code>POST /api/auth/refresh</code> before showing unauthenticated views.
+            Tab messaging features dynamic timeout budgets (60,000ms for multi-step autonomous actions; 3,000ms for operational pings), preventing premature failure during humanized keystroke delays.
+            Header actions feature a dedicated Side Panel launcher triggering <code>chrome.sidePanel.open()</code> alongside the in-page screen pin.
           </p>
         </div>
       </div>
@@ -788,12 +790,123 @@ builder.Entity&lt;RefreshToken&gt;(b =>
         <table>
           <thead><tr><th>Component</th><th>Interface / Class</th><th>Lifecycle & Responsibility</th></tr></thead>
           <tbody>
-            <tr><td><code>GeminiFunctionCallingClient</code></td><td>Class</td><td>Transient bridge translating MEAI tool calls into Gemini function calling payloads & returning <code>FunctionCallContent</code>.</td></tr>
+            <tr><td><code>GeminiFunctionCallingClient</code></td><td>Class</td><td>Transient bridge translating MEAI tool calls into Gemini function calling payloads, extracting & preserving Gemini 3.8+ thought signatures, & returning <code>FunctionCallContent</code>.</td></tr>
             <tr><td><code>AkshChatClientAdapter</code></td><td><code>IChatClient</code></td><td>Singleton bridge resolving scoped AI services, carrying candidate API credentials and routing tool calls.</td></tr>
             <tr><td><code>AkshTools</code></td><td>Static Factory</td><td>Catalog of 7 server-bound tools with closure-bound <code>userId</code>/<code>sessionId</code> preventing cross-tenant leakage.</td></tr>
             <tr><td><code>AkshAgentRunner</code></td><td><code>IAkshAgentRunner</code></td><td>Scoped orchestrator managing turn budget gates, session persistence, SSE stream events, and approval gates.</td></tr>
           </tbody>
         </table>
+      </div>
+    </section>
+
+    <section id="ai-vision-playwright">
+      <h2 class="section-heading">10. Playwright Multimodal AI Vision & Naukri Pipeline Architecture</h2>
+      <p>
+        The autonomous browser worker (<code>workers/playwright-agent/main.py</code>) is augmented with the <strong>Gemini Multimodal AI Vision Decision Engine</strong> and a dedicated <strong>Naukri (naukri.com)</strong> pipeline. This empowers the agent to literally inspect the page screenshot alongside the interactive DOM hierarchy, visually determining the optimal action (Apply button clicks, chatbot/drawer inputs, experience/CTC fields, resume attachment, and Review screen staging).
+      </p>
+
+      <div class="diagram-box">
+        <div class="diagram-title">Figure 10.1: Multimodal AI Vision & Playwright Decision Loop</div>
+        <svg viewBox="0 0 880 260" xmlns="http://www.w3.org/2000/svg" style="width: 100%; height: auto;">
+          <defs>
+            <linearGradient id="visGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#4f46e5"/>
+              <stop offset="100%" stop-color="#06b6d4"/>
+            </linearGradient>
+            <linearGradient id="gemGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#ec4899"/>
+              <stop offset="100%" stop-color="#8b5cf6"/>
+            </linearGradient>
+          </defs>
+
+          <!-- Step 1: Playwright Page -->
+          <rect x="20" y="30" width="160" height="190" rx="8" fill="#161922" stroke="#4f46e5" stroke-width="1.5"/>
+          <text x="35" y="60" fill="#a5b4fc" font-family="Geist, sans-serif" font-size="12" font-weight="700">Playwright Session</text>
+          <text x="35" y="85" fill="#9aa1b5" font-family="JetBrains Mono, monospace" font-size="9">• LinkedIn Easy Apply</text>
+          <text x="35" y="105" fill="#9aa1b5" font-family="JetBrains Mono, monospace" font-size="9">• Naukri.com Drawer</text>
+          <text x="35" y="125" fill="#9aa1b5" font-family="JetBrains Mono, monospace" font-size="9">• ATS Portals (Workday)</text>
+          <rect x="35" y="145" width="130" height="55" rx="5" fill="#1e1b4b" stroke="#6366f1"/>
+          <text x="45" y="165" fill="#c7d2fe" font-family="Geist, sans-serif" font-size="9.5" font-weight="600">Dual Inspection:</text>
+          <text x="45" y="180" fill="#38bdf8" font-family="JetBrains Mono, monospace" font-size="8">1. JPEG Viewport (75%)</text>
+          <text x="45" y="193" fill="#38bdf8" font-family="JetBrains Mono, monospace" font-size="8">2. Visible Control Nodes</text>
+
+          <!-- Arrow to Vision Engine -->
+          <line x1="180" y1="125" x2="250" y2="125" stroke="#38bdf8" stroke-width="2"/>
+          <polygon points="250,125 242,120 242,130" fill="#38bdf8"/>
+
+          <!-- Step 2: Gemini Multimodal Vision -->
+          <rect x="250" y="30" width="220" height="190" rx="8" fill="#11131a" stroke="url(#gemGrad)" stroke-width="2"/>
+          <text x="270" y="60" fill="#f472b6" font-family="Geist, sans-serif" font-size="12" font-weight="700">Gemini Vision Engine</text>
+          <text x="270" y="85" fill="#9aa1b5" font-family="JetBrains Mono, monospace" font-size="9">• Model Cascade:</text>
+          <text x="285" y="105" fill="#ec4899" font-family="JetBrains Mono, monospace" font-size="8.5">1. gemini-2.5-flash</text>
+          <text x="285" y="120" fill="#a855f7" font-family="JetBrains Mono, monospace" font-size="8.5">2. gemini-2.0-flash</text>
+          <text x="285" y="135" fill="#6366f1" font-family="JetBrains Mono, monospace" font-size="8.5">3. gemini-1.5-flash</text>
+          <rect x="265" y="150" width="190" height="55" rx="5" fill="#37153b" stroke="#ec4899"/>
+          <text x="275" y="170" fill="#fbcfe8" font-family="Geist, sans-serif" font-size="9.5" font-weight="600">Visual Reasoning Output:</text>
+          <text x="275" y="185" fill="#f472b6" font-family="JetBrains Mono, monospace" font-size="8">Structured Action JSON</text>
+          <text x="275" y="198" fill="#cbd5e1" font-family="JetBrains Mono, monospace" font-size="7.5">{ action, selector, value }</text>
+
+          <!-- Arrow to Dispatcher -->
+          <line x1="470" y1="125" x2="540" y2="125" stroke="#ec4899" stroke-width="2"/>
+          <polygon points="540,125 532,120 532,130" fill="#ec4899"/>
+
+          <!-- Step 3: Execution Actions -->
+          <rect x="540" y="30" width="160" height="190" rx="8" fill="#161922" stroke="#10b981" stroke-width="1.5"/>
+          <text x="555" y="60" fill="#6ee7b7" font-family="Geist, sans-serif" font-size="12" font-weight="700">Action Execution</text>
+          <text x="555" y="85" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="9">✓ "click" target selector</text>
+          <text x="555" y="105" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="9">✓ "fill" candidate text</text>
+          <text x="555" y="125" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="9">✓ "upload" ATS PDF</text>
+          <text x="555" y="145" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="9">✓ "review_pause" HUD</text>
+          <text x="555" y="165" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="9">✓ "completed" state</text>
+          <text x="555" y="185" fill="#f87171" font-family="JetBrains Mono, monospace" font-size="9">! "auth_required"</text>
+
+          <!-- Arrow to Orchestrator Gate -->
+          <line x1="700" y1="125" x2="750" y2="125" stroke="#10b981" stroke-width="2"/>
+          <polygon points="750,125 742,120 742,130" fill="#10b981"/>
+
+          <!-- Step 4: C# Review Gateway -->
+          <rect x="750" y="30" width="115" height="190" rx="8" fill="#064e3b" stroke="#10b981" stroke-width="1.5"/>
+          <text x="760" y="60" fill="#a7f3d0" font-family="Geist, sans-serif" font-size="11" font-weight="700">Truth Gateway</text>
+          <text x="760" y="85" fill="#ecfdf5" font-family="JetBrains Mono, monospace" font-size="8.5">Copilot Mode:</text>
+          <text x="760" y="100" fill="#6ee7b7" font-family="JetBrains Mono, monospace" font-size="8">PausedForReview</text>
+          <text x="760" y="130" fill="#ecfdf5" font-family="JetBrains Mono, monospace" font-size="8.5">Submit Mode:</text>
+          <text x="760" y="145" fill="#6ee7b7" font-family="JetBrains Mono, monospace" font-size="8">Submitted</text>
+          <text x="760" y="175" fill="#ecfdf5" font-family="JetBrains Mono, monospace" font-size="8.5">Auth Barrier:</text>
+          <text x="760" y="190" fill="#fcd34d" font-family="JetBrains Mono, monospace" font-size="7.5">Extension Guidance</text>
+        </svg>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Naukri.com Dedicated Application Pipeline & Bot Evasion</div>
+          <p>
+            Implements dedicated parsing and action sequencing for <code>naukri.com</code> job listings. Features auth wall detection (<code>/nlogin/login</code>), Chrome stealth headers (<code>Sec-Ch-Ua</code>, <code>Sec-Fetch-*</code>), <code>navigator.webdriver</code> cloaking, Apply button detection (<code>button.apply-button</code>, <code>button:has-text('Apply')</code>, or AI Vision fallback), in-drawer form input for experience, notice period, current CTC, and expected CTC, multipart resume upload, and Copilot Review Gateway staging.
+          </p>
+        </div>
+        <div class="card">
+          <div class="card-title">Gemini Model Fallback Cascade & Transient 500 Resilience</div>
+          <p>
+            In <code>GeminiFunctionCallingClient.cs</code> and <code>AiProviders.cs</code>, model resolution defaults to frontier flash models and dynamically cascades through <code>gemini-2.5-flash</code> &rarr; <code>gemini-2.0-flash</code> &rarr; <code>gemini-1.5-flash</code> &rarr; <code>gemini-flash-lite-latest</code> upon receiving HTTP 404 (NotFound), 400 (thought_signature validation), or transient HTTP 500/502/503/504/429 server errors with exponential backoff. Function call parts preserve Gemini 2.5/3.x cryptographic <code>thoughtSignature</code> tokens at the part level, guaranteeing 100% resilience against model deprecations and strict multi-turn tool loops.
+          </p>
+        </div>
+        <div class="card">
+          <div class="card-title">Extension Step Fingerprint Auto-Remediation & Escalation</div>
+          <p>
+            In <code>extension/content.js</code>, multi-step portal loops dynamically compute DOM element count, type, and field hash signatures. If a step fingerprint remains unchanged after clicking Next, the extension grants a 1000ms transition grace period, actively scans for unselected radio groups or missing required inputs, runs autonomous error remediation, re-clicks Next, and falls back to amber visual highlighting and graceful escalation if human input is mandatory.
+          </p>
+        </div>
+        <div class="card">
+          <div class="card-title">Aksh Dynamic Skill Architecture & Runtime Registry</div>
+          <p>
+            In <code>IAkshSkill.cs</code> and <code>AkshSkillRegistry.cs</code>, Aksh is architected as an All-in-One AI Career Operating System with modular skills: <code>ResumeOptimizerSkill</code>, <code>InterviewCoachSkill</code>, <code>JobApplicationCopilotSkill</code>, <code>SalaryNegotiatorSkill</code>, <code>ProfileAndQueueAuditSkill</code>, and <code>CareerStrategistSkill</code>. At the start of each turn, Aksh resolves candidate intent, streams an SSE <code>skill</code> event with display name and description, binds relevant tool subsets, and dynamically synthesizes a targeted 2-4 milestone plan via <code>AkshPlanner.BuildInitialPlan</code>.
+          </p>
+        </div>
+        <div class="card">
+          <div class="card-title">Chat-First Copilot Experience & In-Chat PDF Generation</div>
+          <p>
+            In <code>AskAkshPage.tsx</code> and <code>AkshTools.cs</code>, the rigid 3-field "Goal" form was eliminated in favor of a conversational-first interface (ChatGPT/Claude style). Submitting a prompt automatically initializes a session with instant streaming. When tailoring resumes, <code>prepare_package</code> returns <code>generatedResumeId</code> and direct <code>resumePdfDownloadUrl</code> (<code>/api/resumes/{id}/export?format=Pdf</code>), enabling Aksh to deliver ready-to-download ATS PDFs directly in the chat stream. While streaming, an animated running anime girl GIF (<code>/assets/anime-running.gif</code>) provides delightful, responsive execution feedback.
+          </p>
+        </div>
       </div>
     </section>
 

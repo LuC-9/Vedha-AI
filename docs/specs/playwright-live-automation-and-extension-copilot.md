@@ -60,28 +60,44 @@ Deliver authentic, verifiable end-to-end job application submission across Linke
        - In Autonomous mode, clicks "Submit application" and waits for `.artdeco-modal` confirmation.
      - Sends an HTTP POST to `/api/orchestrator/queue/{id}/status` marking the queue item as `Submitted` and updates the Job Tracker.
 
-### Engine 2: Playwright Worker Engine (For ATS Portals & Autonomous Pipeline)
-- **Why**: Greenhouse, Lever, Ashby, and Workday portals do not require personal social login and can be completely automated via Playwright.
+### Engine 2: Playwright Worker Engine (For ATS Portals, Naukri, LinkedIn & Multimodal AI Vision)
+- **Why**: Greenhouse, Lever, Ashby, Workday, and Naukri portals require dynamic browser automation. By equipping the Playwright worker with Gemini Multimodal AI Vision (`gemini-2.5-flash` / `gemini-2.0-flash`), the agent captures page screenshots, evaluates visible interactive DOM elements, and visually decides which button to click (Apply, Next, Review, Submit) and how to navigate through complex dynamic recruiter drawers and modal wizards.
+- **Naukri Dedicated Pipeline**:
+  - Direct support for `naukri.com` job postings.
+  - Detects auth wall (`nlogin/login` or `.login-layer`) and returns `AuthenticationRequired` when credentials or session cookies are absent.
+  - Locates and triggers the Apply button (`button.apply-button`, `button:has-text('Apply')`, `.apply-button-container`).
+  - Handles the Naukri in-page application drawer/chatbot (`.drawer-wrapper`, `chatbot-container`, etc.), injecting profile experience, current CTC, expected CTC, notice period, and attaching tailored ATS PDF.
+  - In Copilot mode, pauses at the final Review screen before submission.
+- **Gemini Multimodal AI Vision Decision Engine**:
+  - Multimodal fallback chain: `gemini-2.5-flash` -> `gemini-2.0-flash` -> `gemini-1.5-flash`.
+  - Captures high-res viewport screenshot + interactive DOM tree.
+  - Analyzes ambiguous controls, recruiter screening dropdowns, custom radio options, or multi-step wizards when fixed selectors fail.
+  - Returns structured JSON decision (`action`, `selector`, `value`, `reasoning`).
 - **Components**:
   - `workers/playwright-agent/main.py`:
     - FastAPI HTTP interface listening on port 8000:
-      - `POST /api/playwright/apply`: Executes real Playwright automation for ATS forms and LinkedIn (if cookie provided).
+      - `POST /api/playwright/apply`: Executes real Playwright automation for ATS forms, Naukri, and LinkedIn (if cookie provided).
       - `POST /api/playwright/scrape`: Dynamic SPA job scraping with Playwright.
       - `GET /health`: Healthcheck endpoint.
     - Also consumes NATS JetStream `app.resume.generated` for asynchronous autonomous jobs.
   - Multi-Platform DOM Adapters:
     - Greenhouse / Lever / Ashby / Workday form-fillers with file upload and submission confirmation check.
     - LinkedIn Easy Apply automation supporting `li_at` cookie.
+    - Naukri application drawer & chatbot automation.
 - **Truthful Status Contract**:
-  - If Playwright cannot apply due to missing authentication on LinkedIn:
+  - If Playwright cannot apply due to missing authentication on LinkedIn or Naukri:
     - Returns `AuthenticationRequired`.
-    - Logs clear guidance to use the Desktop Extension Copilot or provide `li_at` cookie.
+    - Logs clear guidance to use the Desktop Extension Copilot or provide session cookies in Candidate Profile.
     - Sets queue item status to `PausedForUserReview` (NEVER `Submitted`).
 
 ## 4. Truthful State Machine & Anti-Fabrication Rules
 1. **Never mock submission**: Providers must never log `Application successfully submitted` unless real submission confirmation was observed in the DOM.
 2. **Review Gateway by Default**: When in Copilot mode, the state is `PausedForUserReview`. The user must either confirm in the Review Gateway HUD or click "Mark Submitted" after reviewing on the external site.
-3. **Real Verification**: For ATS portals, verify the confirmation URL or DOM element (`Thank you for applying`, `Application submitted`, etc.) before reporting `Submitted`.
+3. **Real Verification**: For ATS portals and Naukri, verify the confirmation URL or DOM element (`Thank you for applying`, `Application submitted`, etc.) before reporting `Submitted`.
 
 ## 5. Changelog
+- **2026-10-15 (Extension Fingerprint Recovery)**: Added active step blocker diagnosis, 1000ms transition grace period, missing radio/required field remediation, visual amber glow highlight on blocking fields, and secondary native click fallback in `extension/content.js` to resolve `Step fingerprint unchanged after Next click` stalling.
+- **2026-10-15 (Naukri Bot-Manager Stealth & AI Vision Blocker Handling)**: Added `STEALTH_HEADERS`, `navigator.webdriver` removal, `window.chrome` mocking, post-navigation WAF detection, and explicit `action == "cannot_proceed"` blocker handling with extension guidance in `workers/playwright-agent/main.py`.
+- **2026-10-15**: Added Gemini Multimodal AI Vision Decision Engine (`gemini-2.5-flash` / `gemini-2.0-flash`), dedicated Naukri (`naukri.com`) application drawer and chatbot automation flow, and C# Orchestrator live copilot dispatch. Configured Gemini model fallback cascade (`gemini-2.5-flash` -> `gemini-2.0-flash` -> `gemini-1.5-flash` -> `gemini-flash-lite-latest`) in `GeminiFunctionCallingClient.cs` to eliminate 404 and tool calling stalls.
 - **2026-10-04**: Initial specification for Real Playwright Browser Automation & Desktop Extension Copilot. Eliminated simulated mock submissions, added real LinkedIn Easy Apply modal state machine to Chrome extension, and wired FastAPI HTTP endpoints to the Python Playwright agent.
+

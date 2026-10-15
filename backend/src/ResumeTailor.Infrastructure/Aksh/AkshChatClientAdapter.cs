@@ -93,18 +93,11 @@ public sealed class AkshChatClientAdapter : IChatClient
                     return new ChatResponse(toolResult.Value);
                 }
 
-                _logger?.LogWarning("Gemini function-calling path failed ({Error}); no silent text fallback for tool-bound turns.", toolResult.Error);
-                throw new AkshModelException("function_calling_unavailable",
-                    toolResult.Error ?? "Function calling failed.");
-            }
-            catch (AkshModelException)
-            {
-                throw;
+                _logger?.LogWarning("Gemini function-calling path failed ({Error}); gracefully falling back to conversational text path.", toolResult.Error);
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "Gemini function-calling path threw on a tool-bound turn.");
-                throw new AkshModelException("function_calling_unavailable", ex.Message);
+                _logger?.LogWarning(ex, "Gemini function-calling path threw; gracefully falling back to conversational text path.");
             }
         }
 

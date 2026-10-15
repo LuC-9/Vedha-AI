@@ -500,10 +500,21 @@ INSTRUCTIONS:
             user.PreferredModel,
             cancellationToken);
 
-        if (tailorResult.IsFailure || tailorResult.Value == null)
-            return Result<ApplicationQueueItemDto>.Failure($"Failed to tailor resume with AI: {tailorResult.Error}");
+        ResumeSchema tailoredSchema;
+        bool aiTailoringFailed = false;
+        string? aiTailoringError = null;
 
-        var tailoredSchema = tailorResult.Value;
+        if (tailorResult.IsFailure || tailorResult.Value == null)
+        {
+            aiTailoringFailed = true;
+            aiTailoringError = tailorResult.Error ?? "AI tailoring returned empty or error response";
+            var masterJson = JsonSerializer.Serialize(masterSchema);
+            tailoredSchema = JsonSerializer.Deserialize<ResumeSchema>(masterJson) ?? masterSchema;
+        }
+        else
+        {
+            tailoredSchema = tailorResult.Value;
+        }
 
         // Preserve candidate's genuine personal contact info while adopting the tailored target job title
         var targetTitle = !string.IsNullOrWhiteSpace(tailoredSchema.PersonalInfo?.Title)
@@ -528,7 +539,7 @@ INSTRUCTIONS:
         // review regardless of autonomy level (a SupervisedAuto run with a
         // truth failure still pauses).
         var truthValidation = _atsEngine.ValidateTruthPreservation(masterSchema, tailoredSchema);
-        var truthFailed = truthValidation.IsFailure;
+        var truthFailed = truthValidation.IsFailure || aiTailoringFailed;
         if (truthFailed)
         {
             tailoredSchema.Experience = masterSchema.Experience;
@@ -602,7 +613,11 @@ INSTRUCTIONS:
             $"[ATS Engine] Tailored resume generated with ATS score {atsScore.OverallScore}%",
             $"[Memory Engine] {prefilledAnswers.Count(a => a.Source == "Memory")} questions answered from memory, {prefilledAnswers.Count(a => a.Source != "Memory")} grounded via Gemini AI."
         };
-        if (truthFailed)
+        if (aiTailoringFailed)
+        {
+            startupLogs.Add($"[ATS Engine] Warning: AI resume tailoring encountered a provider error ({aiTailoringError}); safely defaulted to Master Resume content. Manual review REQUIRED.");
+        }
+        if (truthFailed && !aiTailoringFailed)
         {
             startupLogs.Add($"[Truth Gate] FAIL-CLOSED: tailored content failed truth preservation ({truthValidation.Error}); experience/education/projects reverted to master copies. Manual review REQUIRED.");
         }

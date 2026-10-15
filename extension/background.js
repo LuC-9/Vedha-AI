@@ -154,11 +154,11 @@ if (cr?.runtime?.onMessage) {
 // ==========================================
 // Immediate Top-Level Initialization
 // ==========================================
-configureSidePanelBehavior();
-
-if (cr?.action && typeof cr.action.setPopup === "function") {
-  cr.action.setPopup({ popup: "" }).catch(() => {});
-}
+configureSidePanelBehavior().then((configured) => {
+  if (configured && cr?.action && typeof cr.action.setPopup === "function") {
+    cr.action.setPopup({ popup: "" }).catch(() => {});
+  }
+});
 
 // Expose handles for Node test runners & global environments
 if (typeof globalThis !== "undefined") {
@@ -181,7 +181,17 @@ if (typeof module !== "undefined" && module.exports) {
 // Shared Authentication Sync (Extension <-> Web App)
 // ==========================================
 
-const AUTH_STORAGE_KEYS = ["vedha_token", "jwtToken", "token", "candidateProfile", "cachedMasterResume", "cachedUser", "vedha_review_gateway"];
+const AUTH_STORAGE_KEYS = [
+  "vedha_token",
+  "vedha_refresh_token",
+  "jwtToken",
+  "token",
+  "refreshToken",
+  "candidateProfile",
+  "cachedMasterResume",
+  "cachedUser",
+  "vedha_review_gateway"
+];
 const WEBAPP_ORIGIN = "http://localhost:3000";
 
 /**

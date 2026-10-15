@@ -49,3 +49,10 @@ Thumbs.db
 
 # Multi-Agent Teamwork Runtimes & Temp State
 .agents/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+

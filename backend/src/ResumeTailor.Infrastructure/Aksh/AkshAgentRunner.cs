@@ -35,19 +35,22 @@ public class AkshAgentRunner : IAkshAgentRunner
     private readonly IConfiguration _config;
     private readonly ITokenLedger _ledger;
     private readonly ISender _sender;
+    private readonly Skills.IAkshSkillRegistry _skillRegistry;
 
     public AkshAgentRunner(
         IServiceProvider services,
         IApplicationDbContext context,
         IConfiguration config,
         ITokenLedger ledger,
-        ISender sender)
+        ISender sender,
+        Skills.IAkshSkillRegistry skillRegistry)
     {
         _services = services;
         _context = context;
         _config = config;
         _ledger = ledger;
         _sender = sender;
+        _skillRegistry = skillRegistry;
     }
 
     public async IAsyncEnumerable<AkshStreamEvent> StreamTurnAsync(
@@ -128,6 +131,15 @@ public class AkshAgentRunner : IAkshAgentRunner
 
         yield return new AkshStreamEvent("session", new { id = session.Id, status = session.Status.ToString() });
         yield return new AkshStreamEvent("plan", ReadTodos(session.TodoJson));
+
+        // Resolve and stream the active domain skill
+        var activeSkill = _skillRegistry.ResolveSkill(cleanMessage, session);
+        yield return new AkshStreamEvent("skill", new
+        {
+            id = activeSkill.Id,
+            name = activeSkill.DisplayName,
+            description = activeSkill.Description
+        });
 
         // ---- Deterministic turn phase (zero trust in model discipline) ----
         // The observed failure was the model chatting past explicit instructions,
@@ -219,8 +231,10 @@ public class AkshAgentRunner : IAkshAgentRunner
         var scopesFactory = _services.GetRequiredService<IServiceScopeFactory>();
 
         // "generate/continue" with a job URL but no package yet (or an explicit
-        // re-generate/apply ask): run the full prepare pipeline deterministically.
-        var shouldPrepare = session.JobUrl != null
+        // re-generate/apply ask): run the full prepare pipeline deterministically
+        // ONLY when the active skill is the automated job application copilot!
+        var shouldPrepare = activeSkill.Id == "job-application-copilot"
+            && session.JobUrl != null
             && (wantsGenerate || wantsApply
                 || (wantsContinue && nextStep?.Tool == "prepare_package")
                 || (wantsContinue && nextStep?.Tool == AkshTools.ScrapeJob && existingQueueId == null))
@@ -298,7 +312,7 @@ public class AkshAgentRunner : IAkshAgentRunner
             .Take(MaxPromptHistory)
             .ToListAsync(cancellationToken);
 
-        var prompt = BuildPrompt(session, cleanMessage, history.AsEnumerable().Reverse().ToList());
+        var prompt = BuildPrompt(session, cleanMessage, history.AsEnumerable().Reverse().ToList(), activeSkill);
 
         // The candidate's own Settings key rides the turn: global keys are only a fallback.
         // Stored values pass through untouched; the provider decrypts them as usual.
@@ -311,13 +325,31 @@ public class AkshAgentRunner : IAkshAgentRunner
             _ => null,
         };
         var modelOverride = _config.GetValue<string?>("Aksh:Model");
-        // Harness default is gemini-3.8-flash (GA flagship Flash,
-        // agent-engineered; 2.x is capacity-gated for new API users):
-        // explicit global override, else the candidate's Settings model,
-        // else 3.8 Flash. Lite stays available by explicit choice.
+        // Harness default is gemini-2.5-flash (Google's latest production flash model with excellent tool calling and vision):
         var userClient = _services.GetRequiredService<AkshChatClientAdapter>()
-            .WithCredentials(user?.PreferredAiProvider, userKey, modelOverride ?? user?.PreferredModel ?? "gemini-3.8-flash");
-        var agent = HarnessAgentFactory.CreateTurnAgent(_services, userId, session.Id, userClient);
+            .WithCredentials(user?.PreferredAiProvider, userKey, modelOverride ?? user?.PreferredModel ?? "gemini-2.5-flash");
+
+        // Determine whether this turn requires tools or is pure conversational chat:
+        var isGreetingOrGeneral = AkshIntent.IsGreetingOrGeneralChat(cleanMessage);
+        IReadOnlyList<string> toolsForTurn;
+
+        if (isGreetingOrGeneral)
+        {
+            // For pure greetings, introductions, and general questions: chat naturally with ZERO tool overhead
+            toolsForTurn = Array.Empty<string>();
+        }
+        else if (activeSkill.Id == "job-application-copilot" && !AkshIntent.HasApplyIntent(cleanMessage) && !AkshIntent.HasGenerateIntent(cleanMessage) && !candidateUrls.Any())
+        {
+            // If JobApplicationCopilot was resolved but user hasn't provided a job URL or requested applying/generating, chat assistively
+            toolsForTurn = Array.Empty<string>();
+        }
+        else
+        {
+            // Use the skill's declared tools
+            toolsForTurn = activeSkill.RequiredTools ?? Array.Empty<string>();
+        }
+
+        var agent = HarnessAgentFactory.CreateTurnAgent(_services, userId, session.Id, userClient, toolsForTurn);
         var answer = new StringBuilder();
         var chatMessages = new List<ChatMessage> { new(ChatRole.User, prompt) };
 
@@ -506,9 +538,12 @@ public class AkshAgentRunner : IAkshAgentRunner
                 cancellationToken);
     }
 
-    private static string BuildPrompt(AkshSession session, string message, List<AkshMessage> history)
+    private static string BuildPrompt(AkshSession session, string message, List<AkshMessage> history, Skills.IAkshSkill skill)
     {
         var sb = new StringBuilder();
+        sb.AppendLine($"[ACTIVE SKILL: {skill.DisplayName}]");
+        sb.AppendLine(skill.GetInstructions(session));
+        sb.AppendLine();
         sb.AppendLine($"Goal: {session.Goal}");
         if (!string.IsNullOrWhiteSpace(session.JobUrl))
         {

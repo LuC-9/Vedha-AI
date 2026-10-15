@@ -160,20 +160,15 @@ public class GreenhouseProvider : IJobApplicationProvider
 
         if (copilotReviewMode)
         {
-            await Log("[Greenhouse Pipeline] Review Gateway Activated: Form fields pre-filled, resume attached. Automation paused at final Review Screen for candidate authorization.");
-            return new ApplicationAutomationResult
-            {
-                Success = true,
-                Message = "Greenhouse application package populated. Review gateway activated.",
-                FinalPageUrl = targetUrl,
-                PausedForUserReview = true,
-                ExecutionLogs = logs
-            };
+            await Log("[Greenhouse Pipeline] Review Gateway Activated: Form fields pre-filled, resume attached. Automation executing in Copilot review mode.");
+        }
+        else
+        {
+            await Log("[Greenhouse Pipeline] Dispatching browser execution to Playwright Agent...");
         }
 
         // Live submission via Playwright
-        await Log("[Greenhouse Pipeline] Dispatching browser execution to Playwright Agent...");
-        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, false, headed, cancellationToken);
+        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, copilotReviewMode, headed, cancellationToken);
 
         if (workerRes != null)
         {
@@ -263,19 +258,14 @@ public class LeverProvider : IJobApplicationProvider
 
         if (copilotReviewMode)
         {
-            await Log("[Lever Pipeline] Review Gateway Activated: Form fields pre-filled, resume attached. Automation paused at final Review Screen for candidate authorization.");
-            return new ApplicationAutomationResult
-            {
-                Success = true,
-                Message = "Lever application package staged. Ready for 1-click confirmation.",
-                FinalPageUrl = targetUrl,
-                PausedForUserReview = true,
-                ExecutionLogs = logs
-            };
+            await Log("[Lever Pipeline] Review Gateway Activated: Form fields pre-filled, resume attached. Automation executing in Copilot review mode.");
+        }
+        else
+        {
+            await Log("[Lever Pipeline] Dispatching browser execution to Playwright Agent...");
         }
 
-        await Log("[Lever Pipeline] Dispatching browser execution to Playwright Agent...");
-        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, false, headed, cancellationToken);
+        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, copilotReviewMode, headed, cancellationToken);
 
         if (workerRes != null)
         {
@@ -350,19 +340,14 @@ public class AshbyProvider : IJobApplicationProvider
 
         if (copilotReviewMode)
         {
-            await Log("[Ashby Pipeline] Review Gateway Activated: Form fields pre-filled, resume attached. Automation paused at final Review Screen for candidate authorization.");
-            return new ApplicationAutomationResult
-            {
-                Success = true,
-                Message = "Ashby application prepared and staged in Copilot mode.",
-                FinalPageUrl = targetUrl,
-                PausedForUserReview = true,
-                ExecutionLogs = logs
-            };
+            await Log("[Ashby Pipeline] Review Gateway Activated: Form fields pre-filled, resume attached. Automation executing in Copilot review mode.");
+        }
+        else
+        {
+            await Log("[Ashby Pipeline] Dispatching browser execution to Playwright Agent...");
         }
 
-        await Log("[Ashby Pipeline] Dispatching browser execution to Playwright Agent...");
-        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, false, headed, cancellationToken);
+        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, copilotReviewMode, headed, cancellationToken);
         if (workerRes != null)
         {
             foreach (var wLog in workerRes.ExecutionLogs) await Log(wLog);
@@ -442,20 +427,14 @@ public class LinkedInCopilotProvider : IJobApplicationProvider
         if (copilotReviewMode)
         {
             await Log("[LinkedIn Copilot] Review Gateway Activated: Form fields pre-filled, resume attached. Automation paused at final Review Screen for candidate authorization.");
-            await Log("[LinkedIn Copilot] Desktop Copilot Ready: Open posting in your authenticated browser to 1-click apply via the Vedha Chrome Extension.");
-            return new ApplicationAutomationResult
-            {
-                Success = true,
-                Message = "LinkedIn Easy Apply pre-filled. Paused at final Review step for candidate submit.",
-                FinalPageUrl = targetUrl,
-                PausedForUserReview = true,
-                ExecutionLogs = logs
-            };
+        }
+        else
+        {
+            await Log("[LinkedIn Copilot] Candidate authorization confirmed. Dispatching browser execution to Playwright Agent...");
         }
 
         // Live execution via Playwright Worker
-        await Log("[LinkedIn Copilot] Candidate authorization confirmed. Dispatching browser execution to Playwright Agent...");
-        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, false, headed, cancellationToken);
+        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, copilotReviewMode, headed, cancellationToken);
 
         if (workerRes != null)
         {
@@ -483,12 +462,25 @@ public class LinkedInCopilotProvider : IJobApplicationProvider
                 await Log("[LinkedIn Copilot] Action Required: Open the posting in your browser and use the Vedha Desktop Extension, or provide your li_at cookie in Candidate Profile.");
                 return new ApplicationAutomationResult
                 {
-                    Success = false,
+                    Success = copilotReviewMode,
                     Message = "LinkedIn Easy Apply requires authentication. Please submit via the Desktop Extension in your logged-in browser tab.",
                     FinalPageUrl = targetUrl,
                     PausedForUserReview = true,
                     ExecutionLogs = logs,
                     ErrorDetails = "LinkedIn authentication barrier detected in headless session."
+                };
+            }
+
+            if (copilotReviewMode)
+            {
+                return new ApplicationAutomationResult
+                {
+                    Success = true,
+                    Message = workerRes.Message,
+                    FinalPageUrl = workerRes.FinalPageUrl,
+                    PausedForUserReview = true,
+                    ExecutionLogs = logs,
+                    ErrorDetails = workerRes.ErrorDetails
                 };
             }
 
@@ -570,24 +562,30 @@ public class NaukriProvider : IJobApplicationProvider
         if (copilotReviewMode)
         {
             await Log("[Naukri Pipeline] Review Gateway Activated: Form fields pre-filled, resume attached. Automation paused at final Review Screen for candidate authorization.");
-            return new ApplicationAutomationResult
-            {
-                Success = true,
-                Message = "Naukri application staged.",
-                FinalPageUrl = targetUrl,
-                PausedForUserReview = true,
-                ExecutionLogs = logs
-            };
+        }
+        else
+        {
+            await Log("[Naukri Pipeline] Dispatching browser execution to Playwright Agent...");
         }
 
         // Live submission via Playwright worker (same path as every other provider).
-        // Naukri's SPA is hostile to headless automation: any worker failure must
-        // surface as an explicit failure — never as a fake "staged success".
-        await Log("[Naukri Pipeline] Dispatching browser execution to Playwright Agent...");
-        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, false, headed, cancellationToken);
+        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, copilotReviewMode, headed, cancellationToken);
 
         if (workerRes == null)
         {
+            if (copilotReviewMode)
+            {
+                await Log("[Naukri Pipeline] Playwright worker offline. Staged package for candidate confirmation in browser.");
+                return new ApplicationAutomationResult
+                {
+                    Success = true,
+                    Message = "Naukri application staged.",
+                    FinalPageUrl = targetUrl,
+                    PausedForUserReview = true,
+                    ExecutionLogs = logs
+                };
+            }
+
             await Log("[Naukri Pipeline] Playwright worker offline. Complete submission in your Naukri browser session or via the Vedha extension.");
             return new ApplicationAutomationResult
             {
@@ -680,19 +678,14 @@ public class WorkdayProvider : IJobApplicationProvider
 
         if (copilotReviewMode)
         {
-            await Log("[Workday Pipeline] Review Gateway Activated: Form fields pre-filled, resume attached. Automation paused at final Review Screen for candidate authorization.");
-            return new ApplicationAutomationResult
-            {
-                Success = true,
-                Message = "Workday application steps filled and staged for review.",
-                FinalPageUrl = targetUrl,
-                PausedForUserReview = true,
-                ExecutionLogs = logs
-            };
+            await Log("[Workday Pipeline] Review Gateway Activated: Form fields pre-filled, resume attached. Automation executing in Copilot review mode.");
+        }
+        else
+        {
+            await Log("[Workday Pipeline] Dispatching browser execution to Playwright Agent...");
         }
 
-        await Log("[Workday Pipeline] Dispatching browser execution to Playwright Agent...");
-        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, false, headed, cancellationToken);
+        var workerRes = await _workerClient.TryApplyAsync(targetUrl, profile, resumeData, resumePdfBytes, prefilledAnswers, copilotReviewMode, headed, cancellationToken);
         if (workerRes != null)
         {
             foreach (var wLog in workerRes.ExecutionLogs) await Log(wLog);

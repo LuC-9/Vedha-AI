@@ -34,6 +34,12 @@ interface ChatBubble {
   text: string;
 }
 
+interface AkshActiveSkill {
+  id: string;
+  name: string;
+  description: string;
+}
+
 const STATUS_STYLE: Record<AkshSessionStatus, string> = {
   Planning: 'bg-sky-500/10 text-sky-300 border-sky-500/25',
   Executing: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/25',
@@ -54,8 +60,6 @@ const nextBubbleId = () => `b${Date.now()}-${(bubbleSeq += 1)}`;
 
 export const AskAkshPage: React.FC = () => {
   const queryClient = useQueryClient();
-  const [goal, setGoal] = useState('');
-  const [jobUrl, setJobUrl] = useState('');
   const [autonomy, setAutonomy] = useState<AutonomyLevel>('Supervised');
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [thread, setThread] = useState<ChatBubble[]>([]);
@@ -70,6 +74,7 @@ export const AskAkshPage: React.FC = () => {
   // Live ledger totals from the current stream (authoritative mid-turn);
   // falls back to session totals when idle.
   const [liveSpend, setLiveSpend] = useState<{ input: number; output: number } | null>(null);
+  const [activeSkill, setActiveSkill] = useState<AkshActiveSkill | null>(null);
   // Generation guard: async approval fetches that resolve after a session
   // switch or a newer fetch must never overwrite the current gate.
   const approvalReqSeq = useRef(0);
@@ -108,33 +113,6 @@ export const AskAkshPage: React.FC = () => {
     return { input, output, usd: estimateCostUsd(input, output), live: liveSpend !== null };
   }, [session, liveSpend]);
 
-  const startMutation = useMutation({
-    mutationFn: () =>
-      akshApi.startSession(goal.trim(), jobUrl.trim() || undefined, autonomy),
-    onSuccess: (created) => {
-      queryClient.invalidateQueries({ queryKey: ['akshSessions'] });
-      setSessionId(created.id);
-      setThread([
-        {
-          id: nextBubbleId(),
-          role: 'assistant',
-          text: `Plan ready — ${created.todos.length} steps. Send a message to start, or adjust the goal.`,
-        },
-      ]);
-      setPendingApproval(null);
-      setQueueItem(null);
-      setNotice(null);
-      setGoal('');
-    },
-    onError: (err: unknown) => {
-      const message =
-        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ||
-        (err as Error)?.message ||
-        'Could not start the session.';
-      setNotice({ kind: 'error', text: message });
-    },
-  });
-
   const loadApprovalContext = async (approval: AkshApprovalDto) => {
     setPendingApproval(approval);
     setAnswerEdits({});
@@ -150,16 +128,34 @@ export const AskAkshPage: React.FC = () => {
     }
   };
 
-  const sendMessage = async (e?: React.FormEvent) => {
+  const sendMessage = async (e?: React.FormEvent, directText?: string) => {
     e?.preventDefault();
-    if (!sessionId || streaming || !composer.trim()) return;
-    const text = composer.trim();
-    const turnSessionId = sessionId;
+    const raw = directText ?? composer;
+    if (streaming || !raw.trim()) return;
+    const text = raw.trim();
     setComposer('');
     setNotice(null);
     setLiveSpend(null);
     setThread((prev) => [...prev, { id: nextBubbleId(), text, role: 'user' }]);
     setStreaming(true);
+
+    let turnSessionId = sessionId;
+    if (!turnSessionId) {
+      try {
+        const created = await akshApi.startSession(text.slice(0, 100), undefined, autonomy);
+        queryClient.invalidateQueries({ queryKey: ['akshSessions'] });
+        turnSessionId = created.id;
+        setSessionId(created.id);
+      } catch (err: unknown) {
+        const message =
+          (err as { response?: { data?: { error?: string } } })?.response?.data?.error ||
+          (err as Error)?.message ||
+          'Could not initialize conversation.';
+        setNotice({ kind: 'error', text: message });
+        setStreaming(false);
+        return;
+      }
+    }
 
     const assistantId = nextBubbleId();
     setThread((prev) => [...prev, { id: assistantId, role: 'assistant', text: '' }]);
@@ -168,7 +164,12 @@ export const AskAkshPage: React.FC = () => {
 
     try {
       for await (const evt of streamAkshTurn(turnSessionId, text, controller.signal)) {
-        if (evt.type === 'message') {
+        if (evt.type === 'skill') {
+          const data = evt.data as AkshActiveSkill;
+          if (data?.id && data?.name) {
+            setActiveSkill(data);
+          }
+        } else if (evt.type === 'message') {
           const delta = (evt.data as { delta?: string })?.delta ?? '';
           if (delta) {
             setThread((prev) =>
@@ -319,6 +320,7 @@ export const AskAkshPage: React.FC = () => {
     setQueueItem(null);
     setNotice(null);
     setLiveSpend(null);
+    setActiveSkill(null);
     if (id) {
       const seq = approvalReqSeq.current;
       void akshApi.getApproval(id).then((approval) => {
@@ -330,91 +332,59 @@ export const AskAkshPage: React.FC = () => {
 
   return (
     <div className="flex flex-col gap-5 font-sans text-[#e2e4e9] max-w-6xl">
-      {/* Header */}
-      <div className={`${card} p-5 sm:p-6`}>
-        <div className="flex flex-col gap-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <AkshMark size={40} />
-            <div className="min-w-0">
-              <h1 className="text-xl font-bold text-white tracking-tight">Ask Aksh</h1>
+      {/* Sleek App Header */}
+      <div className={`${card} p-4 sm:p-5`}>
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <AkshMark size={38} />
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-lg font-bold text-white tracking-tight">Ask Aksh</h1>
+                <span className="rounded-full bg-indigo-500/10 border border-indigo-500/30 px-2 py-0.5 text-[10px] font-semibold text-indigo-400 uppercase tracking-wider">
+                  Career Copilot
+                </span>
+              </div>
               <p className="text-xs text-[#8e929b]">
-                One goal in, planned run out — drafts first, approval always.
+                Resume tailoring, interview coaching, salary negotiation & applications.
               </p>
             </div>
-            {session && (
-              <span
-                className={`ml-auto inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${STATUS_STYLE[session.status]}`}
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                {session.status}
-              </span>
-            )}
           </div>
 
-          {config && !config.enabled && (
-            <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3.5 py-2.5 text-xs text-amber-200">
-              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-              <span>
-                Aksh is disabled on this deployment (<span className="font-mono">Aksh:Enabled=false</span>).
-                Turns will be refused until an operator enables it.
-              </span>
-            </div>
-          )}
-
-          {/* Goal composer */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (goal.trim()) startMutation.mutate();
-            }}
-            className="grid gap-3 lg:grid-cols-[1fr_1.4fr_auto] lg:items-end"
-          >
-            <label className="flex flex-col gap-1.5 text-xs">
-              <span className={eyebrow}>Goal</span>
-              <input
-                value={goal}
-                onChange={(e) => setGoal(e.target.value)}
-                placeholder="Apply to this Senior .NET role…"
-                className="rounded-xl border border-[#2a2d36] bg-[#16181e] px-3.5 py-2.5 text-sm text-white placeholder:text-[#5b5f6c] outline-none focus:border-indigo-500/60"
-              />
-            </label>
-            <label className="flex flex-col gap-1.5 text-xs">
-              <span className={eyebrow}>Job URL · optional</span>
-              <input
-                value={jobUrl}
-                onChange={(e) => setJobUrl(e.target.value)}
-                placeholder="https://…"
-                inputMode="url"
-                className="rounded-xl border border-[#2a2d36] bg-[#16181e] px-3.5 py-2.5 text-sm text-white placeholder:text-[#5b5f6c] outline-none focus:border-indigo-500/60 font-mono-tech"
-              />
-            </label>
-            <div className="flex gap-2.5">
-              <label className="flex flex-col gap-1.5 text-xs">
-                <span className={eyebrow}>Autonomy</span>
-                <select
-                  value={autonomy}
-                  onChange={(e) => setAutonomy(e.target.value as AutonomyLevel)}
-                  className="rounded-xl border border-[#2a2d36] bg-[#16181e] px-3 py-2.5 text-xs text-white outline-none focus:border-indigo-500/60"
-                >
-                  <option value="Supervised">Supervised</option>
-                  <option value="SupervisedAuto">SupervisedAuto</option>
-                </select>
-              </label>
-              <button
-                type="submit"
-                disabled={!goal.trim() || startMutation.isPending}
-                className="mt-auto inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-500 disabled:opacity-40"
+          <div className="flex items-center gap-2.5 ml-auto">
+            {/* Autonomy Selector */}
+            <div className="flex items-center gap-1.5 rounded-xl border border-[#2a2d36] bg-[#16181e] px-2.5 py-1.5 text-xs text-white">
+              <span className="text-[#8e929b] text-[11px]">Gate:</span>
+              <select
+                value={autonomy}
+                onChange={(e) => setAutonomy(e.target.value as AutonomyLevel)}
+                className="bg-transparent text-xs text-white font-medium outline-none cursor-pointer"
+                title="Supervised requires your review and approval before any external application action."
               >
-                {startMutation.isPending ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Plus className="w-3.5 h-3.5" />
-                )}
-                New run
-              </button>
+                <option value="Supervised" className="bg-[#16181e]">Supervised</option>
+                <option value="SupervisedAuto" className="bg-[#16181e]">SupervisedAuto</option>
+              </select>
             </div>
-          </form>
+
+            {/* New Chat Button */}
+            <button
+              onClick={() => switchSession(null)}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white transition-colors hover:bg-indigo-500 shadow-sm"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              New Chat
+            </button>
+          </div>
         </div>
+
+        {config && !config.enabled && (
+          <div className="mt-3 flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 px-3.5 py-2.5 text-xs text-amber-200">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>
+              Aksh is disabled on this deployment (<span className="font-mono">Aksh:Enabled=false</span>).
+              Turns will be refused until an operator enables it.
+            </span>
+          </div>
+        )}
       </div>
 
       {notice && (
@@ -437,6 +407,15 @@ export const AskAkshPage: React.FC = () => {
         <section className={`${card} xl:col-span-2 flex min-h-[480px] flex-col overflow-hidden`}>
           <div className="flex items-center gap-2.5 border-b border-[#23252b] px-5 py-3.5">
             <span className={eyebrow}>Thread</span>
+            {activeSkill && (
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full border border-indigo-500/30 bg-indigo-500/10 px-2.5 py-1 text-[11px] font-medium text-indigo-300"
+                title={activeSkill.description}
+              >
+                <Sparkles className="w-3 h-3 text-indigo-400" />
+                <span>Skill: {activeSkill.name}</span>
+              </span>
+            )}
             <div className="ml-auto flex items-center gap-2">
               <select
                 value={sessionId ?? ''}
@@ -462,11 +441,68 @@ export const AskAkshPage: React.FC = () => {
 
           <div className="flex flex-1 flex-col gap-3 overflow-y-auto px-5 py-4">
             {thread.length === 0 && (
-              <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
-                <AkshMark size={44} className="opacity-80" />
-                <p className="text-sm text-[#8e929b]">
-                  Start a run above, pick it here, then talk Aksh through it.
-                </p>
+              <div className="flex flex-1 flex-col items-center justify-center gap-6 py-6 text-center max-w-xl mx-auto">
+                <div className="flex flex-col items-center gap-2">
+                  <AkshMark size={48} className="opacity-90 drop-shadow" />
+                  <h2 className="text-base font-bold text-white tracking-tight">How can Aksh help your career today?</h2>
+                  <p className="text-xs text-[#8e929b] max-w-sm">
+                    Optimize resumes with Google XYZ impact formulas, prepare for interviews, benchmark compensation, or run automated applications.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 w-full text-left">
+                  <button
+                    type="button"
+                    onClick={() => sendMessage(undefined, 'Optimize my resume bullets using the Google XYZ impact formula')}
+                    className="flex flex-col gap-1 rounded-xl border border-[#2a2d36] bg-[#16181e] p-3 text-xs transition-colors hover:border-indigo-500/50 hover:bg-indigo-950/20"
+                  >
+                    <span className="font-semibold text-white flex items-center gap-1.5">
+                      <span>✨</span> Resume Optimization
+                    </span>
+                    <span className="text-[#8e929b] text-[11px]">
+                      Rewrite bullets with XYZ formula & ATS keywords
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => sendMessage(undefined, 'Conduct a mock interview for a senior engineering role using STAR method')}
+                    className="flex flex-col gap-1 rounded-xl border border-[#2a2d36] bg-[#16181e] p-3 text-xs transition-colors hover:border-indigo-500/50 hover:bg-indigo-950/20"
+                  >
+                    <span className="font-semibold text-white flex items-center gap-1.5">
+                      <span>🎯</span> Mock Interview Drill
+                    </span>
+                    <span className="text-[#8e929b] text-[11px]">
+                      Practice behavioral STAR questions & get live critique
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => sendMessage(undefined, 'How should I negotiate a counter-offer for total compensation and equity?')}
+                    className="flex flex-col gap-1 rounded-xl border border-[#2a2d36] bg-[#16181e] p-3 text-xs transition-colors hover:border-indigo-500/50 hover:bg-indigo-950/20"
+                  >
+                    <span className="font-semibold text-white flex items-center gap-1.5">
+                      <span>💰</span> Salary Negotiation
+                    </span>
+                    <span className="text-[#8e929b] text-[11px]">
+                      Benchmark compensation & draft counter-offer email
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => sendMessage(undefined, 'Show me recent items in my application queue and candidate profile status')}
+                    className="flex flex-col gap-1 rounded-xl border border-[#2a2d36] bg-[#16181e] p-3 text-xs transition-colors hover:border-indigo-500/50 hover:bg-indigo-950/20"
+                  >
+                    <span className="font-semibold text-white flex items-center gap-1.5">
+                      <span>📋</span> Queue & Profile Audit
+                    </span>
+                    <span className="text-[#8e929b] text-[11px]">
+                      Inspect active applications & screening memories
+                    </span>
+                  </button>
+                </div>
               </div>
             )}
             {thread.map((b) =>
@@ -493,18 +529,47 @@ export const AskAkshPage: React.FC = () => {
                 </div>
               ),
             )}
+            {streaming && (
+              <div className="flex items-center gap-3 rounded-2xl border border-indigo-500/20 bg-indigo-950/30 p-2.5 max-w-sm ml-9 mb-2 shadow-lg backdrop-blur-sm">
+                <img
+                  src="/assets/anime-running.gif"
+                  alt="Aksh is sprinting"
+                  className="w-12 h-12 object-cover rounded-xl shadow-md border border-indigo-500/30 shrink-0"
+                />
+                <div className="min-w-0 flex flex-col">
+                  <span className="text-xs font-semibold text-white flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
+                    Aksh is sprinting...
+                  </span>
+                  <span className="text-[11px] text-indigo-300/80 truncate">
+                    Executing {activeSkill?.name || 'Career Operating System'}
+                  </span>
+                </div>
+              </div>
+            )}
             <div ref={threadEndRef} />
           </div>
 
+          {activeSkill && (
+            <div className="flex items-center justify-between border-t border-[#23252b]/60 bg-indigo-950/20 px-5 py-2 text-xs text-indigo-300">
+              <div className="flex items-center gap-2 min-w-0">
+                <Sparkles className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                <span className="font-semibold text-white truncate">{activeSkill.name}</span>
+                <span className="hidden sm:inline text-indigo-300/70 truncate">· {activeSkill.description}</span>
+              </div>
+              <span className="shrink-0 text-[10px] font-mono uppercase tracking-wider text-indigo-400/80 bg-indigo-500/10 px-1.5 py-0.5 rounded border border-indigo-500/20">Skill Active</span>
+            </div>
+          )}
+
           <form
-            onSubmit={sendMessage}
+            onSubmit={(e) => sendMessage(e)}
             className="flex items-center gap-2.5 border-t border-[#23252b] px-5 py-3.5"
           >
             <input
               value={composer}
               onChange={(e) => setComposer(e.target.value)}
-              disabled={!sessionId || streaming}
-              placeholder={sessionId ? 'Message Aksh…' : 'Select or start a run first'}
+              disabled={streaming}
+              placeholder="Ask Aksh anything (e.g. 'Optimize my resume', 'Practice interview', or paste a job URL)…"
               className="flex-1 rounded-xl border border-[#2a2d36] bg-[#0f1114] px-3.5 py-2.5 text-sm text-white placeholder:text-[#5b5f6c] outline-none focus:border-indigo-500/60 disabled:opacity-40"
             />
             {streaming ? (
@@ -518,7 +583,7 @@ export const AskAkshPage: React.FC = () => {
             ) : (
               <button
                 type="submit"
-                disabled={!sessionId || !composer.trim()}
+                disabled={streaming || !composer.trim()}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-white px-4 py-2.5 text-xs font-semibold text-zinc-950 transition-opacity hover:opacity-90 disabled:opacity-40"
               >
                 <Send className="w-3.5 h-3.5" /> Send

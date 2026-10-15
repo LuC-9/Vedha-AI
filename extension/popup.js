@@ -67,6 +67,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const connectionPill = document.getElementById("connectionPill");
   const connectionText = document.getElementById("connectionText");
   const pinToScreenBtn = document.getElementById("pinToScreenBtn");
+  const openSidePanelBtn = document.getElementById("openSidePanelBtn");
 
   // Login Form Elements
   const loginForm = document.getElementById("loginForm");
@@ -131,8 +132,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Internal State
   let activeTabId = null;
   let activeTabUrl = "";
-  const AUTH_TIMEOUT_MS = 2500;
-  const TAB_MESSAGE_TIMEOUT_MS = 2500;
+  const AUTH_TIMEOUT_MS = 3000;
+  const DEFAULT_TAB_MESSAGE_TIMEOUT_MS = 3000;
+  const LONG_RUNNING_ACTIONS = new Set([
+    "AUTONOMOUS_MULTI_STEP_FILL",
+    "AUTO_APPLY_LINKEDIN",
+    "SAFE_FILL_FORM",
+    "TAILOR_JOB"
+  ]);
 
   function universalCareersJob() {
     return {
@@ -233,7 +240,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   async function hydrateCachedSession() {
     return new Promise((resolve) => {
       chrome.storage.local.get(
-        ["vedha_token", "cachedUser", "candidateProfile", "cachedMasterResume"],
+        ["vedha_token", "vedha_refresh_token", "cachedUser", "candidateProfile", "cachedMasterResume"],
         (stored) => {
           if (stored?.vedha_token) authToken = stored.vedha_token;
           if (stored?.cachedUser) currentUser = stored.cachedUser;
@@ -245,6 +252,43 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
+  async function attemptTokenRefresh() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(["vedha_token", "vedha_refresh_token"], async (stored) => {
+        const token = stored?.vedha_token;
+        const refreshToken = stored?.vedha_refresh_token;
+        if (!token || !refreshToken) return resolve(null);
+
+        try {
+          const refreshRes = await fetchWithTimeout(
+            "http://localhost:5000/api/auth/refresh",
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ accessToken: token, refreshToken: refreshToken })
+            },
+            AUTH_TIMEOUT_MS
+          );
+
+          if (!refreshRes.ok) return resolve(null);
+          const data = await refreshRes.json();
+          const newToken = data?.token || data?.accessToken;
+          const newRefreshToken = data?.refreshToken;
+          if (newToken && newRefreshToken) {
+            await chrome.storage.local.set({
+              vedha_token: newToken,
+              vedha_refresh_token: newRefreshToken,
+              cachedUser: data.user
+            });
+            return resolve({ token: newToken, refreshToken: newRefreshToken, user: data.user });
+          }
+          resolve(null);
+        } catch (_) {
+          resolve(null);
+        }
+      });
+    });
+  }
   function paintCachedCopilot() {
     showCopilotView();
     if (currentMasterResume && masterResumeBadge) {
@@ -271,7 +315,16 @@ document.addEventListener("DOMContentLoaded", async () => {
       });
 
       if (meRes.status === 401 || meRes.status === 403) {
-        chrome.storage.local.remove(["vedha_token", "cachedUser", "candidateProfile", "cachedMasterResume"]);
+        const refreshed = await attemptTokenRefresh();
+        if (refreshed?.token) {
+          authToken = refreshed.token;
+          currentUser = refreshed.user;
+          showCopilotView();
+          loadRealUserData();
+          return true;
+        }
+
+        chrome.storage.local.remove(["vedha_token", "vedha_refresh_token", "cachedUser", "candidateProfile", "cachedMasterResume"]);
         authToken = null;
         currentUser = null;
         currentProfile = null;
@@ -454,7 +507,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         const data = await res.json();
         const token = data.token || data.accessToken;
-        chrome.storage.local.set({ vedha_token: token, cachedUser: data.user });
+        const refreshToken = data.refreshToken;
+        chrome.storage.local.set({
+          vedha_token: token,
+          vedha_refresh_token: refreshToken,
+          cachedUser: data.user
+        });
         authToken = token;
         currentUser = data.user;
 
@@ -483,7 +541,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 6. Handle Sign Out
   if (signOutBtn) {
     signOutBtn.addEventListener("click", () => {
-      chrome.storage.local.remove(["vedha_token", "cachedUser", "candidateProfile", "cachedMasterResume"]);
+      chrome.storage.local.remove(["vedha_token", "vedha_refresh_token", "cachedUser", "candidateProfile", "cachedMasterResume"]);
       authToken = null;
       currentUser = null;
       showLoginView();
@@ -494,7 +552,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // -------------------------------------------------------------
   // 7. Active Tab Message Dispatcher
   // -------------------------------------------------------------
-  async function sendMessageToActiveTab(message) {
+  async function sendMessageToActiveTab(message, customTimeoutMs) {
     let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id) {
       const tabs = await chrome.tabs.query({ active: true });
@@ -502,13 +560,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
     if (!tab?.id) throw new Error("No active browser tab found.");
 
+    const action = message?.action || "";
+    const timeoutMs = customTimeoutMs || (LONG_RUNNING_ACTIONS.has(action) ? 60000 : DEFAULT_TAB_MESSAGE_TIMEOUT_MS);
+
     return new Promise((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {
         if (settled) return;
         settled = true;
         reject(new Error("Timed out waiting for this page. Career tools stay available."));
-      }, TAB_MESSAGE_TIMEOUT_MS);
+      }, timeoutMs);
 
       const finish = (fn, value) => {
         if (settled) return;
@@ -645,7 +706,11 @@ document.addEventListener("DOMContentLoaded", async () => {
 
       const isReviewGateway = reviewGatewayToggle ? reviewGatewayToggle.checked : true;
       autoFillPrimaryBtn.disabled = true;
-      autoFillPrimaryBtn.innerText = "Auto-filling application...";
+      if (autoFillBtnLabel) {
+        autoFillBtnLabel.innerText = "Auto-filling application...";
+      } else {
+        autoFillPrimaryBtn.innerText = "Auto-filling application...";
+      }
 
       if (agentTelemetryCard) agentTelemetryCard.style.display = "flex";
       if (agentActivityTitle) agentActivityTitle.innerText = "Autonomous Copilot Active";
@@ -681,6 +746,13 @@ document.addEventListener("DOMContentLoaded", async () => {
         const res = await sendMessageToActiveTab({ action: "AUTONOMOUS_MULTI_STEP_FILL", payload });
 
         if (res && res.success) {
+          try {
+            chrome.storage.local.get([todayKey], (stored) => {
+              const nextCount = (stored[todayKey] || 0) + 1;
+              chrome.storage.local.set({ [todayKey]: nextCount });
+              if (dailyPacingText) dailyPacingText.innerText = `Daily Safety Limit: ${nextCount} / 25 applications today`;
+            });
+          } catch (_) {}
           updateStepper(4);
           if (agentProgressBar) agentProgressBar.style.width = "100%";
           if (res.pausedForReview) {
@@ -695,7 +767,11 @@ document.addEventListener("DOMContentLoaded", async () => {
         showStatus(`⚠️ ${err.message || "Could not communicate with tab. Please refresh page."}`, "warning", 8000);
       } finally {
         autoFillPrimaryBtn.disabled = false;
-        if (autoFillBtnLabel) autoFillBtnLabel.innerText = "Auto-Fill Application";
+        if (autoFillBtnLabel) {
+          autoFillBtnLabel.innerText = "Auto-Fill Application";
+        } else {
+          autoFillPrimaryBtn.innerText = "⚡ Auto-Fill Application";
+        }
       }
     });
   }
@@ -956,6 +1032,40 @@ document.addEventListener("DOMContentLoaded", async () => {
   // -------------------------------------------------------------
   // 14. Secondary Actions & Navigation
   // -------------------------------------------------------------
+  if (openSidePanelBtn) {
+    openSidePanelBtn.addEventListener("click", async () => {
+      try {
+        if (chrome?.sidePanel && typeof chrome.sidePanel.open === "function") {
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (tab?.windowId) {
+            await chrome.sidePanel.open({ windowId: tab.windowId });
+          } else {
+            await chrome.sidePanel.open({});
+          }
+          if (typeof window !== "undefined" && typeof window.close === "function") {
+            window.close();
+          }
+        } else {
+          chrome.runtime.sendMessage({ action: "OPEN_SIDE_PANEL" }, (resp) => {
+            if (resp?.success && typeof window !== "undefined" && typeof window.close === "function") {
+              window.close();
+            } else if (!resp?.success) {
+              showStatus("Side panel is not supported in this window.", "warning", 3000);
+            }
+          });
+        }
+      } catch (err) {
+        chrome.runtime.sendMessage({ action: "OPEN_SIDE_PANEL" }, (resp) => {
+          if (resp?.success && typeof window !== "undefined" && typeof window.close === "function") {
+            window.close();
+          } else {
+            showStatus("Could not open side panel.", "warning", 3000);
+          }
+        });
+      }
+    });
+  }
+
   if (pinToScreenBtn) {
     pinToScreenBtn.addEventListener("click", async () => {
       try {

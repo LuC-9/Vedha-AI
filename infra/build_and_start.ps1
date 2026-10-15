@@ -13,19 +13,36 @@ if ($machineStatus -notmatch "true|Currently running") {
     }
 }
 
-# 2. Build Container Images natively
+# 2. Build Container Images natively (with automated retry for network resilience)
 $repoRoot = (Resolve-Path "$PSScriptRoot\..").Path
-Write-Host "Building backend image (localhost/infra-backend:latest)..." -ForegroundColor Cyan
-podman build -t localhost/infra-backend:latest -f "$PSScriptRoot\Dockerfile.backend" $repoRoot
-if ($LASTEXITCODE -ne 0) { throw "Podman backend build failed." }
 
-Write-Host "Building frontend image (localhost/infra-frontend:latest)..." -ForegroundColor Cyan
-podman build -t localhost/infra-frontend:latest -f "$PSScriptRoot\Dockerfile.frontend" $repoRoot
-if ($LASTEXITCODE -ne 0) { throw "Podman frontend build failed." }
+function Invoke-PodmanBuildWithRetry {
+    param(
+        [Parameter(Mandatory=$true)][string]$Tag,
+        [Parameter(Mandatory=$true)][string]$DockerfilePath,
+        [Parameter(Mandatory=$true)][string]$ContextPath,
+        [int]$MaxRetries = 3
+    )
+    $attempt = 1
+    while ($attempt -le $MaxRetries) {
+        Write-Host "Building $Tag (Attempt $attempt of $MaxRetries)..." -ForegroundColor Cyan
+        podman build -t $Tag -f $DockerfilePath $ContextPath
+        if ($LASTEXITCODE -eq 0) {
+            return
+        }
+        Write-Warning "Build failed for $Tag on attempt $attempt of $MaxRetries."
+        if ($attempt -lt $MaxRetries) {
+            Write-Host "Waiting 5 seconds before retrying image build..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 5
+        }
+        $attempt++
+    }
+    throw "Podman build failed for $Tag after $MaxRetries attempts."
+}
 
-Write-Host "Building worker image (localhost/infra-worker:latest)..." -ForegroundColor Cyan
-podman build -t localhost/infra-worker:latest -f "$PSScriptRoot\Dockerfile.worker" $repoRoot
-if ($LASTEXITCODE -ne 0) { throw "Podman worker build failed." }
+Invoke-PodmanBuildWithRetry -Tag "localhost/infra-backend:latest" -DockerfilePath "$PSScriptRoot\Dockerfile.backend" -ContextPath $repoRoot
+Invoke-PodmanBuildWithRetry -Tag "localhost/infra-frontend:latest" -DockerfilePath "$PSScriptRoot\Dockerfile.frontend" -ContextPath $repoRoot
+Invoke-PodmanBuildWithRetry -Tag "localhost/infra-worker:latest" -DockerfilePath "$PSScriptRoot\Dockerfile.worker" -ContextPath $repoRoot
 
 # 3. Load Environment Variables from infra/.env
 $envMap = @{}
@@ -43,6 +60,7 @@ $jwtSecret    = if ($envMap["JWT_SECRET"]) { $envMap["JWT_SECRET"] } else { "sup
 $jwtIssuer    = if ($envMap["JWT_ISSUER"]) { $envMap["JWT_ISSUER"] } else { "ResuMateApi" }
 $jwtAudience  = if ($envMap["JWT_AUDIENCE"]) { $envMap["JWT_AUDIENCE"] } else { "ResuMateClient" }
 $geminiKey    = if ($envMap["GEMINI_API_KEY"]) { $envMap["GEMINI_API_KEY"] } else { "" }
+$geminiModel  = if ($envMap["GEMINI_MODEL"]) { $envMap["GEMINI_MODEL"] } else { "gemini-2.5-flash" }
 $aiProvider   = if ($envMap["DEFAULT_AI_PROVIDER"]) { $envMap["DEFAULT_AI_PROVIDER"] } else { "Gemini" }
 $aiModel      = if ($envMap["DEFAULT_AI_MODEL"]) { $envMap["DEFAULT_AI_MODEL"] } else { "gemini-flash-lite-latest" }
 $aiMaxTokens  = if ($envMap["AI_MAX_TOKENS"]) { $envMap["AI_MAX_TOKENS"] } else { "16384" }
@@ -116,7 +134,8 @@ if ($existingContainers -notcontains "vedha-crawler") {
 
 # 6. Start Application Containers (Backend, Frontend)
 Write-Host "Starting vedha-backend..." -ForegroundColor Cyan
-podman rm -f vedha-backend 2>$null | Out-Null
+podman rm -f vedha-backend *>$null
+Start-Sleep -Milliseconds 300
 podman run -d --name vedha-backend --network infra_vedha-network --network-alias backend --network-alias vedha-backend `
     -p 5000:8080 `
     -v vedha_storage_data:/app/s3_local_cache `
@@ -149,12 +168,14 @@ podman run -d --name vedha-backend --network infra_vedha-network --network-alias
 if ($LASTEXITCODE -ne 0) { throw "Failed to start vedha-backend container." }
 
 Write-Host "Starting vedha-frontend..." -ForegroundColor Cyan
-podman rm -f vedha-frontend 2>$null | Out-Null
+podman rm -f vedha-frontend *>$null
+Start-Sleep -Milliseconds 300
 podman run -d --name vedha-frontend --network infra_vedha-network -p 3000:80 localhost/infra-frontend:latest
 if ($LASTEXITCODE -ne 0) { throw "Failed to start vedha-frontend container." }
 
 Write-Host "Starting vedha-worker..." -ForegroundColor Cyan
-podman rm -f vedha-worker 2>$null | Out-Null
+podman rm -f vedha-worker *>$null
+Start-Sleep -Milliseconds 300
 podman run -d --name vedha-worker --network infra_vedha-network --network-alias worker --network-alias vedha-worker `
     -p 8000:8000 `
     -e NATS_URL="nats://nats:4222" `
@@ -165,6 +186,8 @@ podman run -d --name vedha-worker --network infra_vedha-network --network-alias 
     -e AGENTQL_API_KEY="$agentqlKey" `
     -e RESIDENTIAL_PROXY_URL="$resProxy" `
     -e WORKER_STEALTH_ENGINE="$stealthEngine" `
+    -e GEMINI_API_KEY="$geminiKey" `
+    -e GEMINI_MODEL="$geminiModel" `
     localhost/infra-worker:latest
 if ($LASTEXITCODE -ne 0) { throw "Failed to start vedha-worker container." }
 

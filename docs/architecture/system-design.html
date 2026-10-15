@@ -372,6 +372,7 @@
       <a href="#anti-bot"><span class="sec-num">07</span> Anti-Bot Stealth Architecture</a>
       <a href="#resilience"><span class="sec-num">08</span> Security & Failure Recovery</a>
       <a href="#aksh-topology"><span class="sec-num">09</span> Aksh Agent & Token Topology</a>
+      <a href="#multimodal-copilot"><span class="sec-num">10</span> Multimodal Vision & Copilot Pipeline</a>
     </nav>
 
     <div class="sidebar-footer">
@@ -510,6 +511,12 @@
               <td><code>minio/minio:latest</code></td>
               <td><code>9000:9000, 9001:9001</code></td>
               <td>S3-compatible object storage for generated PDF, Word, and text files.</td>
+            </tr>
+            <tr>
+              <td><code>vedha-worker</code></td>
+              <td><code>mcr.microsoft.com/playwright/python:v1.49.0-jammy</code></td>
+              <td><code>8000:8000</code></td>
+              <td>Playwright + AgentQL autonomous execution worker equipped with Gemini Multimodal AI Vision Decision Engine (gemini-2.5-flash / 2.0-flash), dedicated Naukri (naukri.com) application pipeline, stealth engines (Patchright/Camoufox), and resilient container build pipeline.</td>
             </tr>
           </tbody>
         </table>
@@ -735,6 +742,126 @@
           <div class="card-title">Token Ledger & Daily Budget Governor</div>
           <p>
             Every turn and tool invocation logs input/output tokens to <code>AkshSessions</code> and the token ledger audit table. Hard daily quotas (<code>Aksh:DailyTokenBudget</code>) auto-pause runs on budget breach, protecting candidate API quotas and preventing unbounded agent execution loops.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 10: MULTIMODAL VISION & COPILOT PIPELINE -->
+    <section id="multimodal-copilot">
+      <h2 class="section-heading">10. Distributed Multimodal AI Vision & Career Portal Automation Architecture</h2>
+      <p>
+        To automate modern, dynamic job application portals (such as LinkedIn Easy Apply, Naukri, Greenhouse, Lever, and Workday) where DOM classes are frequently obfuscated, dynamic, or rendered inside custom canvas/shadow-DOM wrappers, Vedha employs a <strong>Multimodal AI Vision & DOM Grounding Hybrid Engine</strong>.
+      </p>
+
+      <div class="callout">
+        <div class="callout-title">👁️ Plain-English Summary: Giving the Robot Eyes</div>
+        <p>
+          Traditional scraping bots rely on fragile HTML identifiers (like class names or IDs) that career websites change every week to block bots. Vedha gives the Playwright worker "eyes" by capturing real-time viewport screenshots and extracting visible clickable buttons. Gemini Vision inspects the screen like a human candidate, figures out whether it's looking at an experience question, a salary field, a captcha, or an auth wall, and decides the exact mouse click or keystroke to take. If it spots a login screen or reaches the final submit button in Copilot mode, it pauses safely and hands control to the candidate.
+        </p>
+      </div>
+
+      <div class="diagram-box">
+        <svg viewBox="0 0 760 360" width="100%" height="auto" xmlns="http://www.w3.org/2000/svg">
+          <!-- Background Zones -->
+          <rect x="10" y="10" width="740" height="340" rx="12" fill="#11131a" stroke="#212533" stroke-width="1.5"/>
+
+          <!-- Zone Labels -->
+          <text x="30" y="36" fill="#818cf8" font-family="Geist, sans-serif" font-size="12" font-weight="700">DISTRIBUTED MULTIMODAL COPILOT RUNTIME TOPOLOGY</text>
+
+          <!-- Component Boxes -->
+          <!-- 1. ASP.NET Core Job Application Provider -->
+          <rect x="30" y="60" width="160" height="110" rx="8" fill="#161922" stroke="#6366f1" stroke-width="1.2"/>
+          <text x="42" y="82" fill="#a5b4fc" font-family="Geist, sans-serif" font-size="11" font-weight="700">.NET Core Backend</text>
+          <text x="42" y="98" fill="#9aa1b5" font-family="JetBrains Mono, monospace" font-size="9">JobApplicationProviders</text>
+          <text x="42" y="116" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• Real Playwright Dispatch</text>
+          <text x="42" y="132" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• Copilot Review Mode</text>
+          <text x="42" y="148" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• Model Fallback Cascade</text>
+
+          <!-- Arrow 1 to 2 -->
+          <line x1="190" y1="115" x2="230" y2="115" stroke="#6366f1" stroke-width="1.5"/>
+          <polygon points="230,115 223,111 223,119" fill="#6366f1"/>
+          <text x="195" y="108" fill="#818cf8" font-family="JetBrains Mono, monospace" font-size="8.5">HTTP/REST</text>
+
+          <!-- 2. Playwright Agent Worker -->
+          <rect x="230" y="60" width="180" height="110" rx="8" fill="#161922" stroke="#10b981" stroke-width="1.2"/>
+          <text x="242" y="82" fill="#34d399" font-family="Geist, sans-serif" font-size="11" font-weight="700">vedha-worker (Python)</text>
+          <text x="242" y="98" fill="#9aa1b5" font-family="JetBrains Mono, monospace" font-size="9">Playwright Browser Engine</text>
+          <text x="242" y="116" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• Viewport JPEG Snapshots</text>
+          <text x="242" y="132" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• 50 Interactive Nodes Extract</text>
+          <text x="242" y="148" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• Action Executor Loop</text>
+
+          <!-- Arrow 2 to 3 -->
+          <line x1="410" y1="115" x2="450" y2="115" stroke="#10b981" stroke-width="1.5"/>
+          <polygon points="450,115 443,111 443,119" fill="#10b981"/>
+          <text x="415" y="108" fill="#34d399" font-family="JetBrains Mono, monospace" font-size="8.5">Image+DOM</text>
+
+          <!-- 3. Gemini Vision Frontier Engine -->
+          <rect x="450" y="60" width="270" height="110" rx="8" fill="#161922" stroke="#f59e0b" stroke-width="1.2"/>
+          <text x="462" y="82" fill="#fbbf24" font-family="Geist, sans-serif" font-size="11" font-weight="700">Gemini Vision Frontier Engine</text>
+          <text x="462" y="98" fill="#9aa1b5" font-family="JetBrains Mono, monospace" font-size="9">gemini-2.5-flash / gemini-2.0-flash</text>
+          <text x="462" y="116" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• Structured Action JSON Output</text>
+          <text x="462" y="132" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• Actions: click, fill, upload, pause</text>
+          <text x="462" y="148" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• Auth Wall & Captcha Detection</text>
+
+          <!-- Bottom Row: Flow for Portals & Copilot Gateway -->
+          <!-- 4. Career Portals -->
+          <rect x="30" y="210" width="310" height="120" rx="8" fill="#161922" stroke="#38bdf8" stroke-width="1.2"/>
+          <text x="42" y="232" fill="#38bdf8" font-family="Geist, sans-serif" font-size="11" font-weight="700">Career Portals & ATS Targets</text>
+          <text x="42" y="250" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• <strong>LinkedIn:</strong> Easy Apply modal progression + Auth barrier detection</text>
+          <text x="42" y="268" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• <strong>Naukri:</strong> In-drawer form filling (CTC, Notice, Resume) + Auth wall</text>
+          <text x="42" y="286" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• <strong>Greenhouse / Lever / Ashby:</strong> Clean multi-section form fill</text>
+          <text x="42" y="304" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• <strong>Workday:</strong> Stepper navigation & review staging</text>
+
+          <!-- Arrow 2 to 4 (Browser Automation) -->
+          <line x1="280" y1="170" x2="280" y2="210" stroke="#10b981" stroke-width="1.5"/>
+          <polygon points="280,210 276,203 284,203" fill="#10b981"/>
+          <text x="286" y="195" fill="#10b981" font-family="JetBrains Mono, monospace" font-size="8">CDP Control</text>
+
+          <!-- 5. Copilot Review Gateway & Chrome Extension -->
+          <rect x="380" y="210" width="340" height="120" rx="8" fill="#161922" stroke="#ec4899" stroke-width="1.2"/>
+          <text x="392" y="232" fill="#f472b6" font-family="Geist, sans-serif" font-size="11" font-weight="700">Copilot Review Gateway & Chrome Extension</text>
+          <text x="392" y="250" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• <strong>Safety Guarantee:</strong> Zero unreviewed form submissions</text>
+          <text x="392" y="268" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• <strong>Review Escalation:</strong> When review_pause triggered, halts execution</text>
+          <text x="392" y="286" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• <strong>Extension Hand-off:</strong> Guides user to check fields & submit manually</text>
+          <text x="392" y="304" fill="#646b82" font-family="Geist, sans-serif" font-size="9.5">• <strong>No Credential Exposure:</strong> User logs in natively in Chrome tab</text>
+
+          <!-- Arrow from Worker to Gateway -->
+          <line x1="320" y1="170" x2="420" y2="210" stroke="#ec4899" stroke-width="1.5" stroke-dasharray="3"/>
+          <polygon points="420,210 412,206 416,214" fill="#ec4899"/>
+          <text x="340" y="195" fill="#f472b6" font-family="JetBrains Mono, monospace" font-size="8">Review Staged</text>
+        </svg>
+      </div>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">Multimodal Screenshot & DOM Grounding Loop</div>
+          <p>
+            When standard CSS selectors fail to locate an application trigger, the worker takes a JPEG screenshot (75% quality, ~80KB) and extracts up to 50 visible interactive elements (<code>button</code>, <code>input</code>, <code>select</code>, <code>role="button"</code>). Gemini Vision receives both the visual image and coordinates, outputting a precise JSON action schema (<code>click</code>, <code>fill</code>, <code>upload</code>, <code>review_pause</code>, <code>completed</code>, or <code>auth_required</code>).
+          </p>
+        </div>
+        <div class="card">
+          <div class="card-title">Copilot Review Mode & Zero-Leakage Credential Policy</div>
+          <p>
+            Candidate credentials (passwords, 2FA codes) are never stored or transmitted to headless containers. If an authentication wall or captcha is encountered on LinkedIn or Naukri, the worker returns <code>Success = true, PausedForUserReview = true</code>. The candidate uses the Vedha Chrome Extension in their own authenticated browser tab to complete submission with 100% safety.
+          </p>
+        </div>
+        <div class="card">
+          <div class="card-title">Autonomous Step Fingerprinting & Error Self-Healing</div>
+          <p>
+            The Chrome extension computes DOM step signatures before and after every "Next" transition. If a portal rejects advancement due to unanswered radios or invalid fields, the extension automatically pauses, remediates the validation errors, re-attempts navigation, or highlights the blocking input with an amber outline for human review without getting trapped in infinite loops.
+          </p>
+        </div>
+        <div class="card">
+          <div class="card-title">Strict Gemini Thought-Signature & Transient 500 Cascading</div>
+          <p>
+            For frontier models (Gemini 2.5 / 3.x), tool calls emit cryptographic reasoning tokens (<code>thoughtSignature</code>). The Aksh function calling bridge captures these signatures at the part level and echoes them as sibling properties across multi-turn ReAct iterations. On HTTP 500/502/503/504/429 transient errors, it retries with exponential backoff and cascades dynamically across <code>gemini-2.5-flash</code> &rarr; <code>gemini-2.0-flash</code> &rarr; <code>gemini-1.5-flash</code> &rarr; <code>gemini-flash-lite-latest</code>.
+          </p>
+        </div>
+        <div class="card">
+          <div class="card-title">Aksh Dynamic Skill Architecture & Chat-First Copilot</div>
+          <p>
+            Decouples general career tasks from automated application pipelines via <code>IAkshSkillRegistry</code>. Loads targeted skills (<code>ResumeOptimizer</code>, <code>InterviewCoach</code>, <code>SalaryNegotiator</code>, <code>JobApplicationCopilot</code>, <code>ProfileQueueAudit</code>, <code>CareerStrategist</code>), announces them via SSE <code>skill</code> events, synthesizes dynamic skill-tailored milestone plans via <code>AkshPlanner</code>, provides direct in-chat ATS PDF downloads, and renders an animated running anime girl GIF during live execution.
           </p>
         </div>
       </div>
